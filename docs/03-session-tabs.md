@@ -14,7 +14,7 @@ The tab is a plugin pane, not a shell, which matters when you leave the session:
 
 From Claude's agent view you can attach to a different session in the same tab; the tab keeps its name, and Herdr keeps showing the state of the tab's own session.
 
-The tab opens in the session's folder (when it still exists), so Herdr's folder labels match the session's project. Its terminal is reset after each attach (cooked mode, main screen, visible cursor) so the prompt is readable whatever Claude left behind.
+The tab sits in the space of the session's project ([01](01-sessions-as-agents.md#where-a-session-goes)), is named after the session, and opens in the session's folder (when it still exists). Its terminal is reset after each attach (cooked mode, main screen, visible cursor) so the prompt is readable whatever Claude left behind.
 
 If the tab cannot start (no `claude`, a bad `config.toml`), it shows the error and waits for Enter instead of closing at once — a tab that vanished would look like one you closed.
 

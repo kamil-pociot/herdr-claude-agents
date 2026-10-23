@@ -38,21 +38,21 @@ Work in the main checkout, on `main` or on a normal branch (`git switch -c <name
 
 ## How it fits together
 
-Herdr plugins are a manifest (`herdr-plugin.toml`) plus commands; the Herdr CLI (`$HERDR_BIN_PATH`) is the whole plugin API. One binary, four subcommands, all started through `bin/herdr-claude-agents` (which picks the release build, or `HERDR_CLAUDE_AGENTS_BIN`):
+Herdr plugins are a manifest (`herdr-plugin.toml`) plus commands; the Herdr CLI (`$HERDR_BIN_PATH`) is the whole plugin API. One binary, three subcommands, all started through `bin/herdr-claude-agents` (which picks the release build, or `HERDR_CLAUDE_AGENTS_BIN`):
 
 | Subcommand | Started by | Does |
 |---|---|---|
-| `startup` | `[[startup]]` hook, once per server start | opens the sessions tab in the `Claude` workspace (created if missing) unless a watcher already runs |
-| `open` | the `open` action | same, focused; also asks the watcher to reopen tabs the user closed |
-| `watch` | `[[panes]] sessions` | the watcher: the long-running process; lists sessions on its screen and keeps one tab per session |
+| `startup` | `[[startup]]` hook, once per server start | the watcher: headless, runs until the server stops or the plugin is disabled; keeps one tab per session in its project's space |
+| `open` | the `open` action | asks the watcher to reopen tabs the user closed; becomes the watcher if none runs |
 | `attach` | `[[panes]] session` | one session's tab: `claude attach <id>`, re-attach prompt when left |
 
 | Module | Role |
 |---|---|
 | `claude.rs` | `claude agents --json` (background sessions only), state mapping, `jobs/<id>/state.json` detail |
-| `herdr.rs` | the Herdr CLI: panes, workspaces, plugin panes, `report-agent`, `report-metadata`, agent names |
+| `herdr.rs` | the Herdr CLI: panes, workspaces, plugin panes, `report-agent`, `report-metadata` tokens, "server gone", plugin enabled |
+| `spaces.rs` | which space a session belongs in: its git project, matched by the folders of the spaces' panes |
 | `sync.rs` | pure planning: saved state + sessions + panes → `Op`s; the saved state itself |
-| `watch.rs` | the loop: file watching + polling, carrying out `Op`s, reporting, the sessions screen |
+| `watch.rs` | the loop: file watching + polling, carrying out `Op`s, creating spaces, reporting, stopping |
 | `attach.rs` | the session tab wrapper |
 | `plugin.rs` | plugin env, `config.toml`, per-server state paths, the watcher lock |
 
@@ -60,7 +60,8 @@ Herdr plugins are a manifest (`herdr-plugin.toml`) plus commands; the Herdr CLI 
 
 - **Talk to Herdr through its CLI** (`HERDR_BIN_PATH`) and parse its JSON (`{"result": …}` / `{"error": …}`; reports print nothing on success). Never scrape human output.
 - **Plan, then act.** Decisions about tabs live in `sync::plan` (pure, unit-tested); `watch.rs` only carries them out.
-- **Herdr sees our state, not the screen.** Sessions are reported with source `claude-agents`, which makes Herdr skip screen detection for those panes. Display extras go through `report-metadata` (source `claude-agents.display`), never through state.
+- **Herdr sees our state, not the screen.** Sessions are reported with source `claude-agents`, which makes Herdr skip screen detection for those panes. Nothing else is displayed (no name, title, labels; the pane label is cleared) so the agent looks like any Claude; extras are tokens (source `claude-agents.tokens`).
+- **The watcher stops itself.** Herdr doesn't stop plugin commands with the server, so the watcher exits on `server_not_running` and when the plugin is no longer enabled.
 - **Panes are recognised by pane id + terminal id.** After a Herdr restart, panes come back as shells with the same pane id and a new terminal id.
 - **Manifest commands must not depend on the working directory** (session tabs open in the session's folder): use `$HERDR_PLUGIN_ROOT`.
 - Comments explain *why*; match the surrounding density. `rustfmt.toml` sets `max_width = 120`.
@@ -76,7 +77,8 @@ h.start();
 h.wait_for("the session", || h.status_of("fix auth").as_deref() == Some("working"));
 ```
 
-- `wait_for` polls for 20 s; a timeout prints the agents, panes, plugin log and the sessions tab's screen.
+- Agents are found by their `$claude_session` token (`h.agent("aaaa")`); they carry no other name.
+- `wait_for` polls for 25 s; a timeout prints the agents, panes, plugin log and the watcher's saved state (its last error).
 - Keep the server's socket path short (`/tmp/hca-…`): Unix sockets stop at ~104 bytes.
 - To check a test really guards a fix, temporarily undo the fix and watch it fail.
 

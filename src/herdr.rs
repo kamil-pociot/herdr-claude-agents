@@ -1,14 +1,14 @@
 //! Herdr's side, through its CLI (`HERDR_BIN_PATH`): the plugin API Herdr
 //! documents. Every command prints `{"result": …}` or `{"error": …}`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Result, anyhow, bail};
 use serde::Deserialize;
 use serde_json::Value;
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 pub struct Pane {
     pub pane_id: String,
     pub tab_id: String,
@@ -16,26 +16,17 @@ pub struct Pane {
     pub terminal_id: String,
     #[serde(default)]
     pub label: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct Workspace {
-    pub workspace_id: String,
-    pub label: String,
-}
-
-/// What a session pane shows besides its lifecycle state.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Display {
-    pub agent_name: String,
-    pub title: String,
-    pub labels: Vec<(&'static str, &'static str)>,
-    pub tokens: Vec<(&'static str, String)>,
+    /// The pane's own folder (not where its shell has `cd`'d to since).
+    #[serde(default)]
+    pub cwd: Option<PathBuf>,
 }
 
 pub struct Herdr {
     bin: String,
 }
+
+/// The error Herdr's CLI gives when no server listens on the socket.
+const SERVER_GONE: &str = "server_not_running";
 
 impl Herdr {
     /// The Herdr that launched this process; plain `herdr` outside a plugin.
@@ -70,24 +61,16 @@ impl Herdr {
         Ok(serde_json::from_value(v["panes"].clone())?)
     }
 
-    pub fn workspaces(&self) -> Result<Vec<Workspace>> {
-        let v = self.run(&["workspace", "list"])?;
-        Ok(serde_json::from_value(v["workspaces"].clone())?)
-    }
-
-    /// A new workspace without taking focus; returns it and its first pane.
-    pub fn create_workspace(&self, label: &str) -> Result<(String, String)> {
-        let v = self.run(&["workspace", "create", "--label", label, "--no-focus"])?;
-        let id = v["workspace"]["workspace_id"].as_str().unwrap_or_default().to_string();
-        let root = v["root_pane"]["pane_id"].as_str().unwrap_or_default().to_string();
-        if id.is_empty() {
-            bail!("workspace create returned no id");
-        }
-        Ok((id, root))
+    /// A new workspace for `cwd`, labelled by Herdr as usual, without taking
+    /// focus; returns its first pane.
+    pub fn create_workspace(&self, cwd: &Path) -> Result<Pane> {
+        let cwd = cwd.display().to_string();
+        let v = self.run(&["workspace", "create", "--cwd", &cwd, "--no-focus"])?;
+        Ok(serde_json::from_value(v["root_pane"].clone())?)
     }
 
     /// Opens one of the plugin's `[[panes]]` as a tab of `workspace`, in
-    /// `cwd` (else the plugin's folder).
+    /// `cwd` (else the plugin's folder), without taking focus.
     pub fn open_tab(
         &self,
         plugin: &str,
@@ -95,7 +78,6 @@ impl Herdr {
         workspace: &str,
         cwd: Option<&Path>,
         env: &[(&str, &str)],
-        focus: bool,
     ) -> Result<Pane> {
         let mut args = vec![
             "plugin".to_string(),
@@ -109,7 +91,7 @@ impl Herdr {
             "tab".into(),
             "--workspace".into(),
             workspace.into(),
-            if focus { "--focus" } else { "--no-focus" }.into(),
+            "--no-focus".into(),
         ];
         if let Some(cwd) = cwd.filter(|c| c.is_dir()) {
             args.push("--cwd".into());
@@ -131,8 +113,10 @@ impl Herdr {
         self.run(&["tab", "rename", tab, label]).map(drop)
     }
 
-    pub fn focus_tab(&self, tab: &str) -> Result<()> {
-        self.run(&["tab", "focus", tab]).map(drop)
+    /// Plugin panes are labelled with their entrypoint's title; an ordinary
+    /// pane has none.
+    pub fn clear_pane_label(&self, pane: &str) -> Result<()> {
+        self.run(&["pane", "rename", pane, "--clear"]).map(drop)
     }
 
     /// Takes over the pane's lifecycle state (Herdr stops reading the screen
@@ -158,19 +142,13 @@ impl Herdr {
         self.run(&args).map(drop)
     }
 
-    /// Display-only extras: the name in the sidebar, a title, state labels
-    /// and `$tokens` for custom sidebar rows.
-    pub fn report_display(&self, pane: &str, source: &str, display: &Display, seq: u64) -> Result<()> {
-        let mut args: Vec<String> = ["pane", "report-metadata", pane, "--source", source, "--agent", "claude"]
+    /// `$tokens` for custom Agent sidebar rows; the default rows don't show
+    /// them, so the agent looks like any other Claude. Empty values clear.
+    pub fn report_tokens(&self, pane: &str, source: &str, tokens: &[(&str, String)], seq: u64) -> Result<()> {
+        let mut args: Vec<String> = ["pane", "report-metadata", pane, "--source", source]
             .map(String::from)
             .into();
-        args.extend(["--display-agent".into(), display.agent_name.clone()]);
-        args.extend(["--title".into(), display.title.clone()]);
-        // The labels sent replace the earlier ones.
-        for (state, label) in &display.labels {
-            args.extend(["--state-label".into(), format!("{state}={label}")]);
-        }
-        for (name, value) in &display.tokens {
+        for (name, value) in tokens {
             if value.is_empty() {
                 args.extend(["--clear-token".into(), name.to_string()]);
             } else {
@@ -181,10 +159,19 @@ impl Herdr {
         self.run(&args).map(drop)
     }
 
-    /// Gives the agent a name `herdr agent prompt <name>` accepts.
-    pub fn rename_agent(&self, pane: &str, name: &str) -> Result<()> {
-        self.run(&["agent", "rename", pane, name]).map(drop)
+    /// Whether `plugin` is linked or installed, and enabled.
+    pub fn plugin_enabled(&self, plugin: &str) -> Result<bool> {
+        let v = self.run(&["plugin", "list", "--json", "--plugin", plugin])?;
+        let plugins = v["plugins"].as_array().cloned().unwrap_or_default();
+        Ok(plugins
+            .iter()
+            .any(|p| p["plugin_id"] == plugin && p["enabled"].as_bool().unwrap_or(true)))
     }
+}
+
+/// Whether `err` says the Herdr server is gone (stopped, or restarting).
+pub fn server_gone(err: &anyhow::Error) -> bool {
+    err.to_string().contains(SERVER_GONE)
 }
 
 fn parse_reply(text: &str, args: &[&str]) -> Result<Value> {
@@ -204,26 +191,6 @@ fn parse_reply(text: &str, args: &[&str]) -> Result<Value> {
     Ok(v["result"].take())
 }
 
-/// A name Herdr accepts for an agent (`[a-z][a-z0-9_-]{0,31}`), from a
-/// session name such as "Fix auth (2)" → "fix-auth-2".
-pub fn agent_slug(name: &str) -> String {
-    let mut out = String::new();
-    for c in name.chars().flat_map(char::to_lowercase) {
-        if c.is_ascii_alphanumeric() || c == '_' {
-            out.push(c);
-        } else if !out.ends_with('-') {
-            out.push('-');
-        }
-    }
-    let out = out.trim_matches('-');
-    let out = out.trim_start_matches(|c: char| !c.is_ascii_lowercase());
-    let mut out: String = out.chars().take(32).collect();
-    while out.ends_with('-') {
-        out.pop();
-    }
-    if out.is_empty() { "claude".into() } else { out }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,29 +208,27 @@ mod tests {
     }
 
     #[test]
+    fn a_stopped_server_is_recognised() {
+        let err = parse_reply(
+            r#"{"id":"cli:pane:list","error":{"code":"server_not_running","message":"no herdr server"}}"#,
+            &["pane"],
+        )
+        .unwrap_err();
+        assert!(server_gone(&err));
+        assert!(!server_gone(&anyhow!("herdr pane: not_found: pane not found")));
+    }
+
+    #[test]
     fn panes_deserialize_from_pane_list() {
         let v = parse_reply(
             r#"{"result":{"panes":[{"agent_status":"unknown","pane_id":"w1:p2","tab_id":"w1:t2","workspace_id":"w1",
-                "terminal_id":"term_1","label":"Claude session","revision":0}]}}"#,
+                "terminal_id":"term_1","label":"Claude session","cwd":"/r/api","revision":0}]}}"#,
             &[],
         )
         .unwrap();
         let panes: Vec<Pane> = serde_json::from_value(v["panes"].clone()).unwrap();
         assert_eq!(panes[0].pane_id, "w1:p2");
         assert_eq!(panes[0].label.as_deref(), Some("Claude session"));
-    }
-
-    #[test]
-    fn agent_names_follow_herdr_rules() {
-        assert_eq!(agent_slug("fix-login"), "fix-login");
-        assert_eq!(agent_slug("cli-file-browser-tree (2)"), "cli-file-browser-tree-2");
-        assert_eq!(agent_slug("Fix  AUTH!"), "fix-auth");
-        assert_eq!(agent_slug("42 things"), "things");
-        assert_eq!(agent_slug("éé"), "claude");
-        assert_eq!(agent_slug(&"a".repeat(40)).len(), 32);
-        assert_eq!(
-            agent_slug("abcdefghijklmnopqrstuvwxyz01234 tail"),
-            "abcdefghijklmnopqrstuvwxyz01234"
-        );
+        assert_eq!(panes[0].cwd.as_deref(), Some(Path::new("/r/api")));
     }
 }

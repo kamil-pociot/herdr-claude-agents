@@ -13,7 +13,7 @@ use crate::plugin::{self, Context};
 pub fn run(ctx: &Context) -> Result<()> {
     let Some(id) = std::env::var(plugin::SESSION_ENV).ok().filter(|v| !v.is_empty()) else {
         bail!(
-            "{} is not set: this pane is opened by the Claude sessions tab",
+            "{} is not set: this pane is opened by the plugin for a session",
             plugin::SESSION_ENV
         );
     };

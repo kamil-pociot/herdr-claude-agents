@@ -2,7 +2,7 @@
 
 Goal: Herdr detects Claude Code background sessions and shows them as agents — visible in the Agents sidebar, with Herdr's notifications and other agent features working for them — and the list follows sessions as they start, change and end.
 
-> Status: **v0.1 implemented** (2026-10-23). Herdr 0.9.5, Claude Code 2.1.309.
+> Status: **v0.2 implemented** (2026-10-23): sessions in their projects' spaces, shown like any Claude, a headless watcher. Herdr 0.9.5, Claude Code 2.1.309.
 
 ---
 
@@ -12,9 +12,10 @@ Goal: Herdr detects Claude Code background sessions and shows them as agents —
 |---|---|---|
 | 1 | Language | **Rust**, one binary with subcommands; Herdr runs it through `bin/herdr-claude-agents`. |
 | 2 | Making sessions agents | Herdr agents only exist in panes, so **each session gets a pane** (a tab) running `claude attach <id>`. That also gives the full Claude UI for answering and approving. |
-| 3 | Where | A dedicated **`Claude` workspace** (configurable), one tab per session plus the sessions tab. Not mixed into project workspaces: the plugin must be free to open and close these tabs. |
+| 3 | Where | **The space of the session's project** (v0.2; v0.1 used a dedicated `Claude` workspace): the space with a pane in the session's git repository — preferring its exact folder — or a new space for that folder. The sessions run in projects the user already has spaces for, and should show up there. |
 | 4 | State | **Reported from Claude** (`claude agents --json` state + status) with `pane report-agent`, not read off the screen: right while the tab shows Claude's agent view, and permission prompts count as blocked. Notifications, rollups and waits follow from it. |
-| 5 | Long-running process | The watcher is a **plugin pane** (the "Claude sessions" tab), opened by the startup hook. Herdr's docs say startup hooks are one-shot and plugins must not leave detached daemons; a pane is supervised, visible, and dies with the server. |
+| 5 | Long-running process | The watcher **is the startup hook** (or the `open` action when none runs), headless, and **stops itself** when the server goes or the plugin is disabled. v0.1 ran it in a "Claude sessions" tab, which needed a home space; without a `Claude` space it had none. It is not a detached daemon: the hook process itself runs on, which Herdr allows; Herdr doesn't stop it with the server, hence the self-stop. |
+| 11 | Display | **Like any Claude** in the Agents sidebar (v0.2): no display name, title, state labels or agent name; the plugin pane label cleared. The session's name is on its tab; extras are `$tokens` for custom rows. |
 | 6 | Noticing changes | **File events** on `~/.claude/sessions` and `~/.claude/jobs/*/state.json`, debounced, plus a **2 s poll** (`claude agents --json` takes ~0.1 s). |
 | 7 | Closed tabs | A tab the user closes **stays closed** until the session ends or the `open` action runs; reopening it every 2 s would make it impossible to close. |
 | 8 | Restarts | Herdr restores plugin panes as **shells**; the new watcher replaces them, telling them apart by **terminal id**. No reliance on Herdr's resume commands: the sessions outlive Herdr anyway. |
@@ -31,6 +32,9 @@ Goal: Herdr detects Claude Code background sessions and shows them as agents —
 - `pane report-metadata`: display name, title, state labels, tokens; `--clear-state-labels` cannot be combined with `--state-label` (labels sent replace the old ones).
 - A pane running `claude attach` is detected as a `claude` agent by Herdr's screen manifest even without reports.
 - On restart, plugin panes come back as shells: same pane id and label, new terminal id.
+- Workspaces have no folder (`workspace list` / `session.snapshot` carry none); panes do (`cwd`). A workspace closes when its last pane closes.
+- Startup hooks and actions are not stopped with the server: a long-running one outlives it unless it stops itself. `plugin list --json --plugin <id>` lists nothing for an unlinked plugin; the CLI's error for a stopped server is `server_not_running`.
+- `pane rename <pane> --clear` removes a plugin pane's label.
 - `XDG_CONFIG_HOME` + `XDG_STATE_HOME` fully isolate a Herdr server (socket, plugin registry, plugin state) — used by the tests.
 
 **Claude Code (2.1.309)**
@@ -42,7 +46,6 @@ Goal: Herdr detects Claude Code background sessions and shows them as agents —
 
 ## 2. Next
 
-- Optionally place a session's tab in the workspace of its project (matching `cwd`) instead of the `Claude` workspace.
-- Keys in the sessions tab: Enter to jump to a session's tab, `a` to reopen closed tabs.
+- Optionally close a space the plugin created once its last session ends and nothing else was opened there.
 - Add the `herdr-plugin` topic on GitHub so the marketplace lists it (the repository is public at github.com/kamil-pociot/herdr-claude-agents; `herdr plugin install` already works).
 - Watch for Herdr adding runtime pane listing or plugin storage APIs, which would simplify the saved state.

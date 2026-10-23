@@ -58,8 +58,9 @@ pub struct Tracked {
 /// The watcher's memory, saved per Herdr server in the plugin's state dir.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Saved {
+    /// The last look's error, if it failed: the watcher has no screen.
     #[serde(default)]
-    pub watcher: Option<PaneRef>,
+    pub error: Option<String>,
     /// Session id → its tab.
     #[serde(default)]
     pub sessions: BTreeMap<String, Tracked>,
@@ -164,7 +165,8 @@ mod tests {
             tab_id: format!("{id}-tab"),
             workspace_id: "w1".into(),
             terminal_id: terminal.into(),
-            label: Some("Claude session".into()),
+            label: None,
+            cwd: Some("/r/p".into()),
         }
     }
 
@@ -277,14 +279,21 @@ mod tests {
         let mut saved = Saved::default();
         tracked(&mut saved, "a", &pane("w1:p2", "t1"), Some(&a));
         saved.dismissed.insert("b".into());
-        saved.watcher = Some(PaneRef::of(&pane("w1:p1", "t0")));
+        saved.error = Some("cannot run `claude`".into());
         let path = std::env::temp_dir().join(format!("hca-saved-{}/s.json", std::process::id()));
         saved.save(&path).unwrap();
         let back = Saved::load(&path);
         assert_eq!(back.sessions["a"].pane, saved.sessions["a"].pane);
         assert_eq!(back.sessions["a"].shown, None);
         assert_eq!(back.dismissed, saved.dismissed);
-        assert_eq!(back.watcher, saved.watcher);
+        assert_eq!(back.error, saved.error);
+        // State from v0.1 (with its sessions tab) still loads.
+        std::fs::write(
+            &path,
+            r#"{"watcher":{"pane_id":"w1:p1","tab_id":"w1:t1","terminal_id":"t"}}"#,
+        )
+        .unwrap();
+        assert_eq!(Saved::load(&path), Saved::default());
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
         // Missing or broken: start empty.
         assert_eq!(Saved::load(Path::new("/nonexistent/s.json")), Saved::default());

@@ -1,29 +1,25 @@
 id = "kamilpociot.claude-agents"
 name = "Claude background agents"
-version = "0.1.0"
+version = "0.2.0"
 min_herdr_version = "0.9.2"
-description = "Shows Claude Code background sessions as Herdr agents: one tab each, live state, notifications"
+description = "Shows Claude Code background sessions as Herdr agents, each in the space of its project"
 platforms = ["macos", "linux"]
 
 [[build]]
 command = ["cargo", "build", "--release", "--locked"]
 
-# Opens the sessions tab (the watcher) once the server is up.
+# The watcher: runs for as long as the server does (it exits when the server
+# stops or the plugin is disabled) and keeps one tab per session.
 [[startup]]
 command = ["sh", "-c", "exec sh \"$HERDR_PLUGIN_ROOT/bin/herdr-claude-agents\" startup"]
 
+# Reopens session tabs you closed, and starts the watcher if none runs (for
+# example right after `herdr plugin link`).
 [[actions]]
 id = "open"
 title = "Claude: show background sessions"
 contexts = ["workspace"]
 command = ["sh", "-c", "exec sh \"$HERDR_PLUGIN_ROOT/bin/herdr-claude-agents\" open"]
-
-# The watcher: lists the sessions and keeps one tab per session in step.
-[[panes]]
-id = "sessions"
-title = "Claude sessions"
-placement = "tab"
-command = ["sh", "-c", "exec sh \"$HERDR_PLUGIN_ROOT/bin/herdr-claude-agents\" watch"]
 
 # One background session: `claude attach <id>`, opened by the watcher in the
 # session's folder (hence $HERDR_PLUGIN_ROOT rather than a relative path).

@@ -1,9 +1,9 @@
-//! The watcher: the "Claude sessions" tab. It looks at Claude's background
-//! sessions and Herdr's panes whenever Claude's files change (and every couple
-//! of seconds anyway), keeps one tab per session, reports each session's state
-//! to Herdr, and lists the sessions on its own screen.
+//! The watcher: one headless process per Herdr server (the startup hook, or
+//! the `open` action when none runs). It looks at Claude's background
+//! sessions and Herdr's panes whenever Claude's files change (and every
+//! couple of seconds anyway), keeps one tab per session in the space open on
+//! the session's project, and reports each session's state to Herdr.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -11,71 +11,63 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Result, bail};
 use notify::{RecursiveMode, Watcher};
 
-use crate::claude::{self, Session, State};
-use crate::herdr::{self, Display, Herdr, Pane};
-use crate::plugin::{self, Config, Context, Lock};
+use crate::claude::{self, Session};
+use crate::herdr::{self, Herdr, Pane};
+use crate::plugin::{self, Context, Lock};
+use crate::spaces;
 use crate::sync::{self, Op, PaneRef, Saved, Shown, Tracked};
 
 /// File events come in bursts (a turn rewrites several files): wait this long
 /// for the burst to end before looking.
 const SETTLE: Duration = Duration::from_millis(150);
+/// How often (in looks) to check the plugin is still enabled.
+const ENABLED_EVERY: u32 = 15;
 
-pub fn run(ctx: &Context) -> Result<()> {
-    let Some(_lock) = Lock::try_acquire(&ctx.lock_path())? else {
-        // "Claude: show background sessions" never opens a second one, but a
-        // stray one closes itself.
-        println!("The Claude sessions tab is already open in this Herdr.");
-        std::thread::sleep(Duration::from_secs(3));
+/// Runs until the Herdr server goes away or the plugin is disabled. Returns
+/// at once when another watcher holds this server after `wait`.
+pub fn run(ctx: &Context, wait: Duration) -> Result<()> {
+    let Some(_lock) = Lock::acquire_within(&ctx.lock_path(), wait)? else {
         return Ok(());
     };
     let herdr = Herdr::from_env();
-    let mut screen = Screen::default();
-    let mut watcher = Watch::new(ctx);
+    let mut watch = Watch::new(ctx);
     let mut saved = Saved::load(&ctx.state_path());
     let mut seq = Seq::default();
-    adopt_watcher_pane(&herdr, ctx, &mut saved);
-    loop {
+    for n in 0.. {
+        if n % ENABLED_EVERY == ENABLED_EVERY - 1 && !herdr.plugin_enabled(&ctx.plugin_id).unwrap_or(true) {
+            return Ok(());
+        }
         let config = ctx.config();
         let result = match &config {
             Ok(config) => look(&herdr, ctx, config, &mut saved, &mut seq),
             Err(e) => Err(anyhow::anyhow!("{e}")),
         };
-        if let Err(e) = saved.save(&ctx.state_path()) {
-            eprintln!("cannot save state: {e}");
+        if let Err(e) = &result {
+            // Stopped, or restarting: the next server starts its own watcher.
+            if herdr::server_gone(e) {
+                return Ok(());
+            }
+            if saved.error.as_deref() != Some(&e.to_string()) {
+                eprintln!("herdr-claude-agents: {e:#}");
+            }
         }
-        screen.draw(&render(&result, &saved, &config.clone().unwrap_or_default()));
-        let poll = config.map(|c| c.poll()).unwrap_or(Duration::from_secs(2));
-        watcher.wait(poll);
+        saved.error = result.err().map(|e| e.to_string());
+        if let Err(e) = saved.save(&ctx.state_path()) {
+            eprintln!("herdr-claude-agents: cannot save state: {e}");
+        }
+        watch.wait(config.map(|c| c.poll()).unwrap_or(Duration::from_secs(2)));
     }
-}
-
-/// Makes this pane the watcher, closing the previous one when it is a shell
-/// Herdr restored after a restart.
-fn adopt_watcher_pane(herdr: &Herdr, ctx: &Context, saved: &mut Saved) {
-    let panes = herdr.panes().unwrap_or_default();
-    let me = ctx
-        .pane_id
-        .as_deref()
-        .and_then(|id| panes.iter().find(|p| p.pane_id == id));
-    if let Some(old) = &saved.watcher
-        && Some(old.pane_id.as_str()) != ctx.pane_id.as_deref()
-        && panes
-            .iter()
-            .any(|p| p.pane_id == old.pane_id && p.label.as_deref() == Some(plugin::WATCHER_TITLE))
-    {
-        let _ = herdr.close_pane(&old.pane_id);
-    }
-    saved.watcher = me.map(PaneRef::of);
+    Ok(())
 }
 
 /// One look at both sides and the changes it calls for.
-fn look(herdr: &Herdr, ctx: &Context, config: &Config, saved: &mut Saved, seq: &mut Seq) -> Result<Vec<Session>> {
+fn look(herdr: &Herdr, ctx: &Context, config: &plugin::Config, saved: &mut Saved, seq: &mut Seq) -> Result<()> {
     if std::fs::remove_file(ctx.reopen_path()).is_ok() {
         saved.dismissed.clear();
     }
+    // Herdr first: once its server is gone there is nothing to run Claude for.
+    let mut panes = herdr.panes()?;
     let sessions = claude::list(&config.claude)?;
-    let panes = herdr.panes()?;
-    let workspace = workspace(ctx, saved, &panes);
     let session = |id: &str| sessions.iter().find(|s| s.id == id);
     let mut errors = Vec::new();
     for op in sync::plan(saved, &sessions, &panes) {
@@ -97,51 +89,53 @@ fn look(herdr: &Herdr, ctx: &Context, config: &Config, saved: &mut Saved, seq: &
             Op::Replace { id, pane_id } => {
                 saved.sessions.remove(&id);
                 let _ = herdr.close_pane(&pane_id);
-                open(herdr, ctx, workspace.as_deref(), saved, seq, session(&id).unwrap())
+                panes.retain(|p| p.pane_id != pane_id);
+                open(herdr, ctx, &mut panes, saved, seq, session(&id).unwrap())
             }
-            Op::Open(id) => open(herdr, ctx, workspace.as_deref(), saved, seq, session(&id).unwrap()),
+            Op::Open(id) => open(herdr, ctx, &mut panes, saved, seq, session(&id).unwrap()),
             Op::Report(id) => report(herdr, saved, seq, session(&id).unwrap()),
         };
         if let Err(e) = done {
+            if herdr::server_gone(&e) {
+                return Err(e);
+            }
             errors.push(e.to_string());
         }
     }
     if let Some(e) = errors.first() {
         bail!("{e}");
     }
-    Ok(sessions)
+    Ok(())
 }
 
-/// Where session tabs go: the watcher's own workspace.
-fn workspace(ctx: &Context, saved: &Saved, panes: &[Pane]) -> Option<String> {
-    let me = saved
-        .watcher
-        .as_ref()
-        .map(|w| w.pane_id.as_str())
-        .or(ctx.pane_id.as_deref());
-    panes
-        .iter()
-        .find(|p| Some(p.pane_id.as_str()) == me)
-        .map(|p| p.workspace_id.clone())
-        .or_else(|| ctx.workspace_id.clone())
-}
-
+/// Opens a session's tab in the space open on its project, creating that
+/// space when there is none. `panes` learns the new panes, so the next
+/// session in the same project finds the space.
 fn open(
     herdr: &Herdr,
     ctx: &Context,
-    workspace: Option<&str>,
+    panes: &mut Vec<Pane>,
     saved: &mut Saved,
     seq: &mut Seq,
     s: &Session,
 ) -> Result<()> {
-    let Some(workspace) = workspace else {
-        bail!("no workspace for session tabs");
+    let root = spaces::project_root(&s.cwd);
+    let space = match spaces::space_for(&root, &s.cwd, panes) {
+        Some(space) => space,
+        None => {
+            let first = herdr.create_workspace(&root)?;
+            let space = first.workspace_id.clone();
+            panes.push(first);
+            space
+        }
     };
     let env = [
         (plugin::SESSION_ENV, s.id.as_str()),
         (plugin::NAME_ENV, s.name.as_str()),
     ];
-    let pane = herdr.open_tab(&ctx.plugin_id, plugin::SESSION, workspace, Some(&s.cwd), &env, false)?;
+    let pane = herdr.open_tab(&ctx.plugin_id, plugin::SESSION, &space, Some(&s.cwd), &env)?;
+    // So it looks like any pane running Claude, not "Claude session".
+    herdr.clear_pane_label(&pane.pane_id)?;
     saved.sessions.insert(
         s.id.clone(),
         Tracked {
@@ -149,18 +143,8 @@ fn open(
             shown: None,
         },
     );
-    report(herdr, saved, seq, s)?;
-    // A name for `herdr agent prompt <name>`; names are unique, so a second
-    // session with the same name gets its id appended.
-    let name = herdr::agent_slug(&s.name);
-    if herdr.rename_agent(&pane.pane_id, &name).is_err() {
-        let _ = herdr.rename_agent(&pane.pane_id, &format!("{}-{}", truncate(&name, 23), s.id));
-    }
-    Ok(())
-}
-
-fn truncate(s: &str, n: usize) -> &str {
-    s.char_indices().nth(n).map(|(i, _)| &s[..i]).unwrap_or(s)
+    panes.push(pane);
+    report(herdr, saved, seq, s)
 }
 
 fn report(herdr: &Herdr, saved: &mut Saved, seq: &mut Seq, s: &Session) -> Result<()> {
@@ -176,7 +160,7 @@ fn report(herdr: &Herdr, saved: &mut Saved, seq: &mut Seq, s: &Session) -> Resul
         s.session_id.as_deref(),
         seq.next(),
     )?;
-    herdr.report_display(&pane, plugin::DISPLAY_SOURCE, &display(s), seq.next())?;
+    herdr.report_tokens(&pane, plugin::TOKEN_SOURCE, &tokens(s), seq.next())?;
     if renamed {
         herdr.rename_tab(&t.pane.tab_id, &s.name)?;
     }
@@ -184,24 +168,16 @@ fn report(herdr: &Herdr, saved: &mut Saved, seq: &mut Seq, s: &Session) -> Resul
     Ok(())
 }
 
-/// The sidebar's view of a session: its name, its folder as the title, and
-/// `$summary` / `$project` / `$claude_state` for custom Agent rows.
-pub fn display(s: &Session) -> Display {
-    let mut labels = vec![("blocked", "needs input")];
-    if matches!(s.state, State::Failed | State::Stopped) {
-        labels.extend([("idle", s.state.label()), ("done", s.state.label())]);
-    }
-    Display {
-        agent_name: s.name.clone(),
-        title: s.project(),
-        labels,
-        tokens: vec![
-            ("summary", s.detail.clone().unwrap_or_default()),
-            ("project", s.project()),
-            ("claude_state", s.state.label().to_string()),
-            ("claude_session", s.id.clone()),
-        ],
-    }
+/// `$summary` / `$project` / `$claude_state` / `$claude_session` for custom
+/// Agent sidebar rows. Nothing else: the default rows show the agent as any
+/// other Claude.
+pub fn tokens(s: &Session) -> Vec<(&'static str, String)> {
+    vec![
+        ("summary", s.detail.clone().unwrap_or_default()),
+        ("project", s.project()),
+        ("claude_state", s.state.label().to_string()),
+        ("claude_session", s.id.clone()),
+    ]
 }
 
 /// Increasing report numbers, across watcher restarts too (Herdr ignores a
@@ -286,76 +262,10 @@ fn relevant(path: &Path, reopen: &Path) -> bool {
     }
 }
 
-/// The watcher's own screen: redrawn only when it changes.
-#[derive(Default)]
-struct Screen {
-    last: String,
-}
-
-impl Screen {
-    fn draw(&mut self, text: &str) {
-        if text == self.last {
-            return;
-        }
-        let mut out = std::io::stdout().lock();
-        let _ = write!(out, "\x1b[?25l\x1b[H\x1b[2J{}", text.replace('\n', "\r\n"));
-        let _ = out.flush();
-        self.last = text.to_string();
-    }
-}
-
-pub fn render(result: &Result<Vec<Session>>, saved: &Saved, config: &Config) -> String {
-    const DIM: &str = "\x1b[2m";
-    const BOLD: &str = "\x1b[1m";
-    const RESET: &str = "\x1b[0m";
-    let mut out = String::new();
-    let sessions = match result {
-        Ok(s) => s.as_slice(),
-        Err(_) => &[],
-    };
-    out.push_str(&format!(
-        "{BOLD}Claude background sessions{RESET}  {DIM}{}{RESET}\n\n",
-        sessions.len()
-    ));
-    if let Err(e) = result {
-        out.push_str(&format!("\x1b[31m{e}{RESET}\n\n"));
-    } else if sessions.is_empty() {
-        out.push_str(&format!("{DIM}None running. Start one with `claude --bg`.{RESET}\n"));
-    }
-    for s in sessions {
-        let (mark, colour) = match s.state {
-            State::Blocked => ("●", "\x1b[33m"),
-            State::Working => ("◐", "\x1b[36m"),
-            State::Done => ("✓", "\x1b[32m"),
-            State::Failed => ("✗", "\x1b[31m"),
-            State::Stopped => ("○", DIM),
-        };
-        let hidden = if saved.dismissed.contains(&s.id) {
-            "  (tab closed)"
-        } else {
-            ""
-        };
-        out.push_str(&format!(
-            "{colour}{mark}{RESET} {BOLD}{}{RESET}  {colour}{}{RESET}  {DIM}{}{hidden}{RESET}\n",
-            s.name,
-            s.state.label(),
-            s.project()
-        ));
-        if let Some(d) = &s.detail {
-            out.push_str(&format!("  {DIM}{}{RESET}\n", truncate(d, 100)));
-        }
-    }
-    out.push_str(&format!(
-        "\n{DIM}Each session has its own tab in this workspace (\"{}\"). A tab you close stays closed\n\
-         until the session ends or you run \"Claude: show background sessions\".{RESET}\n",
-        config.workspace
-    ));
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::claude::State;
 
     fn session(state: State) -> Session {
         Session {
@@ -369,21 +279,16 @@ mod tests {
     }
 
     #[test]
-    fn the_sidebar_shows_name_folder_and_tokens() {
-        let d = display(&session(State::Working));
-        assert_eq!(d.agent_name, "fix auth");
-        assert_eq!(d.title, "api");
-        assert_eq!(d.labels, [("blocked", "needs input")]);
-        assert!(d.tokens.contains(&("summary", "Reading a.rs".into())));
-        assert!(d.tokens.contains(&("claude_session", "abc".into())));
-        // Failed and stopped are idle to Herdr, so they say what they are.
-        let d = display(&session(State::Failed));
-        assert!(d.labels.contains(&("idle", "failed")));
-        assert!(d.labels.contains(&("done", "failed")));
+    fn tokens_carry_what_the_default_rows_leave_out() {
+        let t = tokens(&session(State::Blocked));
+        assert!(t.contains(&("summary", "Reading a.rs".into())));
+        assert!(t.contains(&("project", "api".into())));
+        assert!(t.contains(&("claude_state", "needs input".into())));
+        assert!(t.contains(&("claude_session", "abc".into())));
         // No detail: the token is cleared.
         let mut s = session(State::Done);
         s.detail = None;
-        assert!(display(&s).tokens.contains(&("summary", String::new())));
+        assert!(tokens(&s).contains(&("summary", String::new())));
     }
 
     #[test]
@@ -407,22 +312,5 @@ mod tests {
         assert!(b > a);
         seq.0 = u64::MAX / 2;
         assert_eq!(seq.next(), u64::MAX / 2 + 1);
-    }
-
-    #[test]
-    fn the_screen_lists_sessions_and_errors() {
-        let saved = Saved::default();
-        let config = Config::default();
-        let text = render(&Ok(vec![session(State::Blocked)]), &saved, &config);
-        assert!(text.contains("fix auth"));
-        assert!(text.contains("needs input"));
-        assert!(text.contains("Reading a.rs"));
-        let text = render(&Ok(vec![]), &saved, &config);
-        assert!(text.contains("None running"));
-        let text = render(&Err(anyhow::anyhow!("cannot run `claude`")), &saved, &config);
-        assert!(text.contains("cannot run `claude`"));
-        let mut saved = Saved::default();
-        saved.dismissed.insert("abc".into());
-        assert!(render(&Ok(vec![session(State::Done)]), &saved, &config).contains("(tab closed)"));
     }
 }

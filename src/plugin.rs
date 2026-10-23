@@ -9,25 +9,20 @@ use std::time::Duration;
 use serde::Deserialize;
 
 pub const PLUGIN_ID: &str = "kamilpociot.claude-agents";
-/// `[[panes]]` entrypoints in herdr-plugin.toml, and their titles (Herdr uses
-/// the title as the pane's label).
-pub const WATCHER: &str = "sessions";
-pub const WATCHER_TITLE: &str = "Claude sessions";
+/// The `[[panes]]` entrypoint of a session tab in herdr-plugin.toml.
 pub const SESSION: &str = "session";
 /// How a session pane learns which session it shows.
 pub const SESSION_ENV: &str = "CLAUDE_AGENTS_SESSION";
 pub const NAME_ENV: &str = "CLAUDE_AGENTS_NAME";
-/// Report sources: lifecycle state, and display extras.
+/// Report sources: lifecycle state, and `$tokens`.
 pub const SOURCE: &str = "claude-agents";
-pub const DISPLAY_SOURCE: &str = "claude-agents.display";
+pub const TOKEN_SOURCE: &str = "claude-agents.tokens";
 
 /// `config.toml` in the plugin's config dir (`herdr plugin config-dir
 /// kamilpociot.claude-agents`).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
-    /// The workspace holding the sessions tab and one tab per session.
-    pub workspace: String,
     /// Claude Code's command: a name on Herdr's `PATH` or a full path.
     pub claude: String,
     /// Seconds between looks when no file change wakes the watcher.
@@ -37,7 +32,6 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            workspace: "Claude".into(),
             claude: "claude".into(),
             poll_seconds: 2,
         }
@@ -74,8 +68,6 @@ pub struct Context {
     pub state_dir: PathBuf,
     /// Which Herdr server: state is kept per server (named sessions differ).
     pub server_key: String,
-    pub pane_id: Option<String>,
-    pub workspace_id: Option<String>,
 }
 
 impl Context {
@@ -89,8 +81,6 @@ impl Context {
             config_dir: var("HERDR_PLUGIN_CONFIG_DIR").map(PathBuf::from),
             state_dir,
             server_key: server_key(&var("HERDR_SOCKET_PATH").unwrap_or_default()),
-            pane_id: var("HERDR_PANE_ID"),
-            workspace_id: var("HERDR_WORKSPACE_ID"),
         }
     }
 
@@ -138,8 +128,24 @@ impl Lock {
         Ok((rc == 0).then_some(Lock(file)))
     }
 
+    /// Waits up to `wait` for the lock: a watcher from before a Herdr restart
+    /// may still be finishing its last look.
+    pub fn acquire_within(path: &Path, wait: Duration) -> std::io::Result<Option<Lock>> {
+        let deadline = std::time::Instant::now() + wait;
+        loop {
+            if let Some(lock) = Lock::try_acquire(path)? {
+                return Ok(Some(lock));
+            }
+            if std::time::Instant::now() >= deadline {
+                return Ok(None);
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+
     /// Whether a watcher holds the lock right now.
-    pub fn is_held(path: &Path) -> bool {
+    #[cfg(test)]
+    fn is_held(path: &Path) -> bool {
         matches!(Lock::try_acquire(path), Ok(None))
     }
 }
@@ -151,11 +157,12 @@ mod tests {
     #[test]
     fn config_has_defaults_and_rejects_typos() {
         assert_eq!(Config::parse("").unwrap(), Config::default());
-        let c = Config::parse("workspace = \"Agents\"\nclaude = \"/opt/claude\"\npoll_seconds = 0\n").unwrap();
-        assert_eq!(c.workspace, "Agents");
+        let c = Config::parse("claude = \"/opt/claude\"\npoll_seconds = 0\n").unwrap();
         assert_eq!(c.claude, "/opt/claude");
         assert_eq!(c.poll(), Duration::from_secs(1));
-        assert!(Config::parse("workspce = \"x\"").is_err());
+        assert!(Config::parse("claud = \"x\"").is_err());
+        // v0.1's `workspace` is gone: a config still naming it says so.
+        assert!(Config::parse("workspace = \"Claude\"").is_err());
         assert_eq!(Config::load(None).unwrap(), Config::default());
         assert_eq!(
             Config::load(Some(Path::new("/nonexistent"))).unwrap(),
@@ -178,7 +185,13 @@ mod tests {
         assert!(lock.is_some());
         assert!(Lock::is_held(&path));
         assert!(Lock::try_acquire(&path).unwrap().is_none());
+        assert!(
+            Lock::acquire_within(&path, Duration::from_millis(300))
+                .unwrap()
+                .is_none()
+        );
         drop(lock);
+        assert!(Lock::acquire_within(&path, Duration::ZERO).unwrap().is_some());
         assert!(!Lock::is_held(&path));
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }

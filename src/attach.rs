@@ -337,7 +337,17 @@ mod tests {
     #[test]
     fn a_running_process_reports_its_arguments() {
         let mut child = Command::new("sleep").arg("5").spawn().unwrap();
-        let a = args_of(child.id() as libc::pid_t).unwrap();
+        // Right after a start, Linux can briefly show no arguments, or still
+        // the parent's (the tab just looks again 100 ms later; a tab's parent
+        // runs `… attach`, so that never reads as the agent list).
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let a = loop {
+            match args_of(child.id() as libc::pid_t) {
+                Some(a) if a.last().map(String::as_str) == Some("5") => break a,
+                _ if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+                other => panic!("not `sleep 5`: {other:?}"),
+            }
+        };
         assert_eq!(a.last().map(String::as_str), Some("5"));
         assert!(a[0].ends_with("sleep"));
         child.kill().unwrap();

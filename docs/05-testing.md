@@ -23,6 +23,21 @@ Next to the code they test (`#[cfg(test)]` in each module): parsing `claude agen
 
 Assertions go through the Herdr CLI (`agent list`, `pane list`, `tab get`, `pane read`). Agents are found by their `$claude_session` token. `h.watcher_running()` tells whether the watcher holds its lock. `wait_for` polls for up to 25 s; on a timeout it prints the agents, the panes, the plugin's command log and the watcher's saved state, which holds its last error.
 
+## Linux
+
+The suite runs on Linux too (process arguments come from `/proc/<pid>/cmdline` there, file events from inotify). On a Mac, with Docker, run it in a container with Herdr's Linux binary on `PATH` (`herdr-linux-aarch64` or `-x86_64` from Herdr's GitHub releases, in a folder of its own); the checkout is mounted read-only and the build goes to a volume:
+
+```sh
+mkdir -p /tmp/herdr-linux && curl -fsSL -o /tmp/herdr-linux/herdr \
+  https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-linux-aarch64 && chmod +x /tmp/herdr-linux/herdr
+docker run --rm -v "$PWD":/src:ro -v /tmp/herdr-linux:/opt/herdr:ro -v hca-target:/target \
+  -e CARGO_TARGET_DIR=/target -w /src rust:1 sh -c \
+  'export PATH=/opt/herdr:$PATH; rustup component add clippy rustfmt; cargo fmt --all -- --check &&
+   cargo clippy --all-targets -- -D warnings && cargo test && cargo test'
+```
+
+A test that reads a process's arguments right after starting it retries: under load, Linux can briefly show none, or still the parent's.
+
 Never point the tests at the real Herdr server or the real `~/.claude`: they open and close panes, and a real `claude attach` would attach to live sessions.
 
 Related: [04 · Install and configuration](04-configuration.md).

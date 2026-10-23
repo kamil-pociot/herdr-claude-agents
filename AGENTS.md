@@ -20,9 +20,10 @@ herdr plugin action invoke kamilpociot.claude-agents.open   # start it in a runn
 cargo fmt --all
 cargo clippy --all-targets -- -D warnings
 cargo test                                          # unit + end-to-end (needs `herdr` on PATH)
+# on Linux too, in Docker: see docs/05-testing.md#linux
 ```
 
-A change is done when `fmt --check`, `clippy -D warnings` and the **whole** suite pass — run the suite twice; the end-to-end tests drive real Herdr servers and timing bugs show up as rare failures.
+A change is done when `fmt --check`, `clippy -D warnings` and the **whole** suite pass (on Linux too when it touches process or file handling) — run the suite twice; the end-to-end tests drive real Herdr servers and timing bugs show up as rare failures.
 
 Requirements at run time: Herdr 0.9.2+ and Claude Code with background sessions (`claude agents --json`).
 

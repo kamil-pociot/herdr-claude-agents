@@ -1,7 +1,10 @@
 //! A session tab: `claude attach <id>`, and what happens when you leave it.
-//! The tab shows one session and has no shell behind it, so leaving the
-//! session (`←` towards the agent list, or `Ctrl-Z`) asks whether to attach
-//! again or close the tab.
+//!
+//! The tab shows one session. `←` still opens Claude's agent list, but
+//! opening another session there jumps to that session's own tab and puts
+//! this tab back on its session, so every tab keeps showing what Herdr is
+//! told about it. The tab has no shell behind it, so quitting (or `Ctrl-Z`)
+//! asks whether to attach again or close the tab.
 
 use std::io::{BufRead, Write};
 use std::process::Command;
@@ -10,12 +13,20 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, Result, bail};
 
 use crate::claude;
+use crate::herdr::Herdr;
 use crate::plugin::{self, Context};
+use crate::sync::Saved;
 
 /// How often the attach is checked for having turned into the agent list.
 const CHECK: Duration = Duration::from_millis(100);
+/// How often, in the agent list, the tab looks at which session it shows.
+const LOOK: Duration = Duration::from_millis(300);
 /// How long it gets to quit before it is killed.
 const GRACE: Duration = Duration::from_secs(2);
+/// How long to wait for the watcher to open a session that has no tab.
+const NEW_TAB: Duration = Duration::from_secs(6);
+/// The terminal title of Claude's agent list.
+const LIST_TITLE: &str = "claude agents";
 
 pub fn run(ctx: &Context) -> Result<()> {
     let Some(id) = std::env::var(plugin::SESSION_ENV).ok().filter(|v| !v.is_empty()) else {
@@ -26,23 +37,30 @@ pub fn run(ctx: &Context) -> Result<()> {
     };
     let name = std::env::var(plugin::NAME_ENV).unwrap_or_else(|_| id.clone());
     let config = ctx.config().map_err(anyhow::Error::msg)?;
+    let tab = Tab {
+        ctx,
+        herdr: Herdr::from_env(),
+        pane: std::env::var("HERDR_PANE_ID").ok().filter(|p| !p.is_empty()),
+        claude: config.claude,
+        id,
+    };
     loop {
-        let left = attach(&config.claude, &id)?;
+        match tab.attach()? {
+            Left::Opened(other) => {
+                // Back on this tab's session at once; the other has its own tab.
+                tab.show(&other);
+                continue;
+            }
+            Left::Quit | Left::Stopped => {}
+        }
         // Ended (stopped or removed): the tab goes; the watcher forgets it.
-        let running = claude::list(&config.claude).map(|all| all.iter().any(|s| s.id == id));
+        let running = claude::list(&tab.claude).map(|all| all.iter().any(|s| s.id == tab.id));
         if !running.unwrap_or(true) {
             return Ok(());
         }
-        if left == Left::AgentList {
-            print!(
-                "\r\nThe agent list isn't available here: this tab shows \x1b[1m{name}\x1b[0m only \
-                 (Herdr's Agents sidebar lists the others).\r\n"
-            );
-        } else {
-            print!("\r\n\x1b[1m{name}\x1b[0m is still running in the background.\r\n");
-        }
         print!(
-            "Enter: attach again · q: close this tab \x1b[2m(it stays closed until you run \
+            "\r\n\x1b[1m{name}\x1b[0m is still running in the background.\r\n\
+             Enter: attach again · q: close this tab \x1b[2m(it stays closed until you run \
              \"Claude: show background sessions\")\x1b[0m\r\n"
         );
         let _ = std::io::stdout().flush();
@@ -53,63 +71,142 @@ pub fn run(ctx: &Context) -> Result<()> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Left {
     /// It quit (or the session ended).
     Quit,
     /// `Ctrl-Z`.
     Stopped,
-    /// `←`: Claude relaunches the attach as `claude agents`, where any
-    /// session can be opened — not this tab's, and not what Herdr is told.
-    AgentList,
+    /// Another session was opened from the agent list (its id).
+    Opened(String),
 }
 
-/// Runs `claude attach <id>` until it ends, or ends it when it turns into the
-/// agent list. `Ctrl-Z` would stop it with no shell to bring it back, so a
-/// stop ends the attach too (the session itself keeps running).
-fn attach(claude: &str, id: &str) -> Result<Left> {
-    let saved = Termios::get();
-    let child = Command::new(claude)
-        .args(["attach", id])
-        .spawn()
-        .with_context(|| format!("cannot run `{claude} attach {id}`"))?;
-    let pid = child.id() as libc::pid_t;
-    let mut left = Left::Quit;
-    let mut ending: Option<Instant> = None;
-    loop {
-        let mut status = 0;
-        // SAFETY: waiting on our own child.
-        let rc = unsafe { libc::waitpid(pid, &mut status, libc::WUNTRACED | libc::WNOHANG) };
-        if rc == pid {
-            if !libc::WIFSTOPPED(status) {
+struct Tab<'a> {
+    ctx: &'a Context,
+    herdr: Herdr,
+    /// This tab's pane, for its title and screen.
+    pane: Option<String>,
+    claude: String,
+    /// The session this tab shows.
+    id: String,
+}
+
+impl Tab<'_> {
+    /// Runs `claude attach <id>` until it ends. `←` relaunches it in place as
+    /// `claude agents`; once that opens another session, it is ended. `Ctrl-Z`
+    /// would stop it with no shell to bring it back, so a stop ends it too
+    /// (the session itself keeps running).
+    fn attach(&self) -> Result<Left> {
+        let saved = Termios::get();
+        let child = Command::new(&self.claude)
+            .args(["attach", &self.id])
+            .spawn()
+            .with_context(|| format!("cannot run `{} attach {}`", self.claude, self.id))?;
+        let pid = child.id() as libc::pid_t;
+        let mut left = Left::Quit;
+        let mut ending: Option<Instant> = None;
+        let mut looked = Instant::now() - LOOK;
+        // The last name seen in the agent list, so each is looked up once.
+        let mut seen: Option<String> = None;
+        loop {
+            let mut status = 0;
+            // SAFETY: waiting on our own child.
+            let rc = unsafe { libc::waitpid(pid, &mut status, libc::WUNTRACED | libc::WNOHANG) };
+            if rc == pid {
+                if !libc::WIFSTOPPED(status) {
+                    break;
+                }
+                left = Left::Stopped;
+                end(pid, libc::SIGTERM);
+                // SAFETY: signalling our own child.
+                unsafe { libc::kill(pid, libc::SIGCONT) };
+                ending.get_or_insert_with(Instant::now);
+            } else if rc == -1 && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
                 break;
             }
-            left = Left::Stopped;
-            end(pid, libc::SIGTERM);
-            // SAFETY: signalling our own child.
-            unsafe { libc::kill(pid, libc::SIGCONT) };
-            ending.get_or_insert_with(Instant::now);
-        } else if rc == -1 && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
-            break;
-        }
-        match ending {
-            None if args_of(pid).is_some_and(|a| in_agent_list(&a)) => {
-                left = Left::AgentList;
-                end(pid, libc::SIGTERM);
-                ending = Some(Instant::now());
+            match ending {
+                None if looked.elapsed() >= LOOK && args_of(pid).is_some_and(|a| in_agent_list(&a)) => {
+                    looked = Instant::now();
+                    if let Some(other) = self.opened_elsewhere(&mut seen) {
+                        left = Left::Opened(other);
+                        end(pid, libc::SIGTERM);
+                        ending = Some(Instant::now());
+                    }
+                }
+                Some(since) if since.elapsed() > GRACE => end(pid, libc::SIGKILL),
+                _ => {}
             }
-            Some(since) if since.elapsed() > GRACE => end(pid, libc::SIGKILL),
-            _ => {}
+            std::thread::sleep(CHECK);
         }
-        std::thread::sleep(CHECK);
+        // Whatever state it left the terminal in: cooked mode, main screen,
+        // visible cursor. (1047, not 1049: that also restores a saved cursor,
+        // which sends output back to the top when no alternate screen was on.)
+        if let Some(t) = saved {
+            t.set();
+        }
+        print!("\x1b[?1047l\x1b[?25h\x1b[0m");
+        let _ = std::io::stdout().flush();
+        Ok(left)
     }
-    // Whatever state it left the terminal in: cooked mode, main screen, cursor.
-    if let Some(t) = saved {
-        t.set();
+
+    /// The id of a session other than this tab's that the agent list has
+    /// opened in this tab, if any.
+    fn opened_elsewhere(&self, seen: &mut Option<String>) -> Option<String> {
+        let pane = self.pane.as_deref()?;
+        let title = self.herdr.pane_title(pane).ok().flatten();
+        let screen = match title.as_deref() {
+            Some(t) if t != LIST_TITLE => None,
+            _ => self.herdr.pane_screen(pane).ok(),
+        };
+        let name = shown(title.as_deref(), screen.as_deref())?;
+        if seen.as_deref() == Some(name.as_str()) {
+            return None;
+        }
+        *seen = Some(name.clone());
+        let sessions = claude::list(&self.claude).ok()?;
+        let s = sessions.iter().find(|s| s.name == name || s.id == name)?;
+        (s.id != self.id).then(|| s.id.clone())
     }
-    print!("\x1b[?1049l\x1b[?25h\x1b[0m");
-    let _ = std::io::stdout().flush();
-    Ok(left)
+
+    /// Shows session `other`'s own tab, asking the watcher to open it first
+    /// when it has none (new, or its tab was closed).
+    fn show(&self, other: &str) {
+        let pane_of = || {
+            Saved::load(&self.ctx.state_path())
+                .sessions
+                .get(other)
+                .map(|t| t.pane.pane_id.clone())
+        };
+        let mut pane = pane_of();
+        if pane.is_none() {
+            let _ = std::fs::write(self.ctx.reopen_path(), "");
+            let deadline = Instant::now() + NEW_TAB;
+            while pane.is_none() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(200));
+                pane = pane_of();
+            }
+        }
+        if let Some(pane) = pane {
+            let _ = self.herdr.focus_agent(&pane);
+        }
+    }
+}
+
+/// The session Claude shows in a pane, from its terminal title (Claude sets
+/// it to the open session's name, or "claude agents" in the list) or, with
+/// no telling title, from the screen: the open session's name sits in the
+/// rule under its prompt (`──── fix auth ─`). None in the list.
+fn shown(title: Option<&str>, screen: Option<&str>) -> Option<String> {
+    if let Some(t) = title.map(str::trim).filter(|t| !t.is_empty() && *t != LIST_TITLE) {
+        return Some(t.to_string());
+    }
+    screen?.lines().rev().find_map(|line| {
+        let line = line.trim();
+        let inner = line.strip_suffix('─')?.trim_end();
+        let name = inner.trim_start_matches('─');
+        (line.starts_with('─') && name.len() < inner.len() && !name.trim().is_empty() && !name.contains('─'))
+            .then(|| name.trim().to_string())
+    })
 }
 
 fn end(pid: libc::pid_t, signal: libc::c_int) {
@@ -207,6 +304,24 @@ mod tests {
         assert!(in_agent_list(&args(&["/bin/sh", "/tmp/claude", "agents"])));
         // The program itself being called "attach" doesn't count.
         assert!(in_agent_list(&args(&["attach"])));
+    }
+
+    #[test]
+    fn the_open_session_comes_from_the_title_or_the_screen() {
+        assert_eq!(shown(Some("fix auth"), None).as_deref(), Some("fix auth"));
+        // The list itself: nothing open, whatever the screen says.
+        let list = "Working\n✳ fix auth   Reading\n────────────\n❯ describe a task\n────────────\n";
+        assert_eq!(shown(Some("claude agents"), Some(list)), None);
+        // No title: the name in the rule under the prompt.
+        let session = "● done\n──────────────── cli-file-browser-tree (2) ─\n❯ \n────────────────\n  ⏵⏵ auto mode";
+        assert_eq!(shown(None, Some(session)).as_deref(), Some("cli-file-browser-tree (2)"));
+        assert_eq!(
+            shown(Some("claude agents"), Some(session)).as_deref(),
+            Some("cli-file-browser-tree (2)")
+        );
+        assert_eq!(shown(None, Some(list)), None);
+        assert_eq!(shown(None, None), None);
+        assert_eq!(shown(Some("  "), None), None);
     }
 
     #[test]

@@ -21,7 +21,7 @@ Goal: Herdr detects Claude Code background sessions and shows them as agents —
 | 9 | Interactive sessions | **Left out**: they already run in a terminal; when that's a Herdr pane, Herdr sees them there. |
 | 10 | Talking to Herdr | The **CLI** (`HERDR_BIN_PATH`), as Herdr recommends for plugins, not the raw socket. |
 | 11 | Display | **Like any Claude** in the Agents sidebar (v0.2): no display name, title, state labels or agent name; the plugin pane label cleared. The session's name is on its tab; extras are `$tokens` for custom rows. |
-| 12 | One session per tab | `←` would turn a session tab into Claude's agent list, where another session can be opened while Herdr is still told about the first. The tab **ends the attach the moment its process relaunches as `claude agents`** and offers its own session again; there is no Claude option for just this. |
+| 12 | One session per tab | `←` keeps opening Claude's agent list in a session tab, but **a session opened there is shown in its own tab** (focused through Herdr) and the tab goes back to its session, so each tab shows what Herdr reports about it and both stay in the sidebar. The tab notices the relaunch as `claude agents` and then the opened session's name in the terminal title (or on screen). A first version simply ended the agent list; there is no Claude option to turn off only the agent view. |
 
 ## 1. Findings
 
@@ -41,7 +41,7 @@ Goal: Herdr detects Claude Code background sessions and shows them as agents —
 **Claude Code (2.1.309)**
 
 - `claude agents --json`: active sessions (`--all` adds finished ones) with `id`, `pid`, `cwd`, `kind` (`background` / `interactive`), `sessionId`, `name`, `status` (`busy`, `idle`, `waiting`, `shell`), `state` (`working`, `done`, `blocked`, …).
-- `claude attach <id|name>`: `←` goes to the agent view by **relaunching the same process as `claude agents`** (same pid; `CLAUDE_CODE_AGENT_VIEW_RELAUNCH`), `Ctrl-Z` drops to the shell; the session keeps running either way. No option turns off just the agent view (`CLAUDE_CODE_DISABLE_AGENT_VIEW` / `disableAgentView` turn off the whole background feature).
+- `claude attach <id|name>`: `←` goes to the agent view by **relaunching the same process as `claude agents`** (same pid; `CLAUDE_CODE_AGENT_VIEW_RELAUNCH`); opening a session there attaches it inside that process (no new relaunch) and titles the terminal with its name (the list is titled `claude agents`); `Ctrl-Z` drops to the shell; the session keeps running either way. No option turns off just the agent view (`CLAUDE_CODE_DISABLE_AGENT_VIEW` / `disableAgentView` turn off the whole background feature).
 - `~/.claude/sessions/<pid>.json`: the registry, updated on status changes. `~/.claude/jobs/<id>/state.json`: a background job's state with a one-line `detail`.
 - Background sessions inherit `HERDR_*` from wherever the daemon started, so Herdr's own `SessionStart` hook reports them to a stale pane ([docs/01](docs/01-sessions-as-agents.md#known-issue-herdrs-own-claude-hook)).
 

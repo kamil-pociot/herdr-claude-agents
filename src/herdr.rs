@@ -159,6 +159,34 @@ impl Herdr {
         self.run(&args).map(drop)
     }
 
+    /// The pane's terminal title without a leading spinner (Claude puts the
+    /// open session's name there, or "claude agents" in its agent list).
+    pub fn pane_title(&self, pane: &str) -> Result<Option<String>> {
+        let v = self.run(&["pane", "get", pane])?;
+        Ok(v["pane"]["terminal_title_stripped"]
+            .as_str()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(String::from))
+    }
+
+    /// What the pane shows right now, as text.
+    pub fn pane_screen(&self, pane: &str) -> Result<String> {
+        let out = Command::new(&self.bin)
+            .args(["pane", "read", pane, "--source", "visible"])
+            .stdin(Stdio::null())
+            .output()?;
+        if !out.status.success() {
+            bail!("herdr pane read: {}", String::from_utf8_lossy(&out.stderr).trim());
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    /// Shows the agent's pane: its space, its tab, and focus.
+    pub fn focus_agent(&self, pane: &str) -> Result<()> {
+        self.run(&["agent", "focus", pane]).map(drop)
+    }
+
     /// Whether `plugin` is linked or installed, and enabled.
     pub fn plugin_enabled(&self, plugin: &str) -> Result<bool> {
         let v = self.run(&["plugin", "list", "--json", "--plugin", plugin])?;

@@ -6,23 +6,28 @@ The tab is a plugin pane, not a shell, which matters when you leave the session:
 
 | Do | Result |
 |---|---|
-| `←` (Claude's agent list) | "The agent list isn't available here: this tab shows *name* only. Enter: attach again · q: close this tab" |
-| `Ctrl-Z` | "*name* is still running in the background. Enter: attach again · q: close this tab": with no shell to return to, a stopped attach would freeze the tab, so it ends the attach instead (the session itself is not touched) |
+| `←` | Claude's agent list, as in any terminal |
+| open another session from that list | **that session's own tab** is shown (opened first if it has none), and this tab goes back to its session |
+| open this tab's session from that list | it stays, as usual |
+| `Esc` in the list (quits it), or `Ctrl-Z` | "*name* is still running in the background. Enter: attach again · q: close this tab". With no shell to return to, a stopped attach would freeze the tab, so `Ctrl-Z` ends the attach instead (the session itself is not touched) |
 | `Enter` at that prompt | attaches again |
 | `q` at that prompt | closes the tab; it stays closed until the `open` action ([01](01-sessions-as-agents.md#closing-a-tab)) |
 | the session ends | the tab closes by itself |
 
-**One session per tab.** In a plain terminal, `←` takes `claude attach` to Claude's agent list, where any session can be opened — in this tab that would show one session while Herdr's sidebar reports another. Claude does it by relaunching the attach process in place as `claude agents`, so the tab checks its process's arguments every 100 ms (`KERN_PROCARGS2` on macOS, `/proc/<pid>/cmdline` on Linux) and ends it the moment `attach` is gone from them, before anything else can be opened. `←` while typing a prompt still moves the cursor: only the relaunch counts. The other sessions are in Herdr's Agents sidebar.
+**One session per tab.** Left alone, the agent list would open another session inside this tab, which would then show one session while Herdr's sidebar reports another. So every session opened from a tab's agent list goes to its own tab, and both stay in the sidebar, each selectable.
 
-The tab sits in the space of the session's project ([01](01-sessions-as-agents.md#where-a-session-goes)), is named after the session, and opens in the session's folder (when it still exists). Its terminal is reset after each attach (cooked mode, main screen, visible cursor) so the prompt is readable whatever Claude left behind.
+How it works: on `←`, Claude relaunches the attach process in place as `claude agents`, and an opened session titles the terminal with its name (the list itself is titled `claude agents`). The tab checks its process's arguments every 100 ms (`KERN_PROCARGS2` on macOS, `/proc/<pid>/cmdline` on Linux); while they no longer say `attach`, it reads the pane's title from Herdr every 300 ms — or, with no telling title, the name in the rule under Claude's prompt on screen (`──── fix auth ─`). A name that isn't this tab's session is looked up in `claude agents --json` (so a renamed session still matches by id); then the list is ended, Herdr focuses that session's tab (`herdr agent focus`) — asking the watcher for it and waiting up to 6 s when it has none, which also reopens other tabs you closed — and this tab attaches its own session again. `←` while typing a prompt still moves the cursor: only the relaunch counts.
+
+The tab sits in the space of the session's project ([01](01-sessions-as-agents.md#where-a-session-goes)), is named after the session, and opens in the session's folder (when it still exists). Its terminal is reset after each attach (cooked mode, main screen without moving the cursor, visible cursor) so the prompt is readable whatever Claude left behind.
 
 If the tab cannot start (no `claude`, a bad `config.toml`), it shows the error and waits for Enter instead of closing at once — a tab that vanished would look like one you closed.
 
 ## Code and tests
 
-- `src/attach.rs`: the attach loop (`waitpid` with `WNOHANG | WUNTRACED` every 100 ms), stops, spotting the agent list (`args_of`, `in_agent_list`), ending the process (SIGTERM, SIGKILL after 2 s), terminal restore, the prompt.
-- Unit: what counts as the agent list (also for a `claude` that is a script), reading a live process's arguments, parsing `KERN_PROCARGS2`.
+- `src/attach.rs`: the attach loop (`waitpid` with `WNOHANG | WUNTRACED` every 100 ms), stops, spotting the agent list (`args_of`, `in_agent_list`), which session it shows (`shown`, `opened_elsewhere`), showing the other session's tab (`show`), ending the process (SIGTERM, SIGKILL after 2 s), terminal restore, the prompt.
+- `src/herdr.rs`: `pane_title`, `pane_screen`, `focus_agent`.
 - `herdr-plugin.toml`: the `session` pane; commands go through `$HERDR_PLUGIN_ROOT` because the tab's working directory is the session's folder.
-- E2e: the tab runs `claude attach <id>` (a fake `claude` echoes it); the tab opens in the session's folder; `←` (the fake relaunching itself as `claude agents`) brings the prompt, the agent stays on its session, Enter attaches the same session again.
+- Unit: what counts as the agent list (also for a `claude` that is a script), the open session from a title or a screen (the list itself shows none), reading a live process's arguments, parsing `KERN_PROCARGS2`.
+- E2e: the tab runs `claude attach <id>` (a fake `claude` echoes it); the tab opens in the session's folder; `←` (the fake relaunching itself as `claude agents`) shows the list, opening the tab's own session there changes nothing, opening another focuses that session's tab and puts this one back on its session, both agents staying.
 
 Related: [01 · Background sessions as agents](01-sessions-as-agents.md), [02 · State and notifications](02-state-and-notifications.md).

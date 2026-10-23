@@ -58,10 +58,13 @@ impl Herdr {
             &fake,
             format!(
                 // `left` stands for `←`: the real attach relaunches itself in
-                // place as `claude agents`, the agent list.
+                // place as `claude agents`, the agent list, titled so; `open
+                // <name>` opens a session there, titling the terminal with it.
                 "#!/bin/sh\ncase \"$1\" in\n  \
-                 agents) if [ \"$2\" = --json ]; then cat '{list}'; else echo 'fake agent list'; \
-                 while read l; do :; done; fi ;;\n  \
+                 agents) if [ \"$2\" = --json ]; then cat '{list}'; else \
+                 printf '\\033]0;claude agents\\007'; echo 'fake agent list'; \
+                 while read l; do case \"$l\" in 'open '*) n=${{l#open }}; \
+                 printf '\\033]0;%s\\007' \"$n\"; echo \"fake viewing $n\" ;; esac; done; fi ;;\n  \
                  attach) echo \"fake attach $2\"; while read l; do [ \"$l\" = left ] && exec \"$0\" agents; \
                  echo \"got $l\"; done ;;\nesac\n",
                 list = root.join("list.json").display()
@@ -369,28 +372,45 @@ fn a_closed_tab_stays_closed_until_the_open_action() {
 }
 
 #[test]
-fn leaving_for_the_agent_list_stays_on_the_tabs_session() {
+fn opening_another_session_from_the_agent_list_shows_its_own_tab() {
     let Some(mut h) = Herdr::new() else { return };
     h.sessions(&[
         session("aaaa", "fix auth", &h.dir("alpha"), "working", "busy"),
         session("bbbb", "write docs", &h.dir("alpha"), "working", "busy"),
     ]);
     h.start();
-    h.wait_for("the session", || h.agent("aaaa").is_some());
+    h.wait_for("both sessions", || {
+        h.agent("aaaa").is_some() && h.agent("bbbb").is_some()
+    });
     let pane = h.agent("aaaa").unwrap()["pane_id"].as_str().unwrap().to_string();
+    let other = h.agent("bbbb").unwrap()["pane_id"].as_str().unwrap().to_string();
     let screen = || h.cli_text(&["pane", "read", &pane, "--source", "recent"]);
     h.wait_for("the attach", || screen().contains("fake attach aaaa"));
 
-    // `←` turns the attach into the agent list, where another session could
-    // be opened; the tab ends it at once and offers its own session again.
+    // `←` opens the agent list in the tab, as in any terminal.
     h.cli(&["pane", "run", &pane, "left"]);
-    h.wait_for("the prompt", || {
-        screen().contains("The agent list isn't available here")
+    h.wait_for("the agent list", || screen().contains("fake agent list"));
+    // Opening this tab's own session there changes nothing.
+    h.cli(&["pane", "run", &pane, "open fix auth"]);
+    h.wait_for("its own session", || screen().contains("fake viewing fix auth"));
+    std::thread::sleep(Duration::from_secs(1));
+    assert_eq!(screen().matches("fake attach aaaa").count(), 1);
+
+    // Opening another: its own tab is shown, and this one goes back to its session.
+    h.cli(&["pane", "run", &pane, "open write docs"]);
+    h.wait_for("the other session's tab", || {
+        let focused = h.panes().into_iter().find(|p| p["focused"] == true);
+        focused.is_some_and(|p| p["pane_id"] == other.as_str())
     });
+    let deadline = Instant::now() + WAIT;
+    while screen().matches("fake attach aaaa").count() < 2 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert_eq!(screen().matches("fake attach aaaa").count(), 2, "{}", screen());
+    assert!(!screen().contains("still running in the background"));
+    // Both stay in the sidebar, each in its own tab.
     assert_eq!(h.agent("aaaa").unwrap()["pane_id"], pane.as_str());
-    h.cli(&["pane", "send-keys", &pane, "enter"]);
-    h.wait_for("attaching again", || screen().matches("fake attach aaaa").count() == 2);
-    assert!(!screen().contains("fake attach bbbb"));
+    assert_eq!(h.agent("bbbb").unwrap()["pane_id"], other.as_str());
     h.stop();
 }
 

@@ -57,8 +57,13 @@ impl Herdr {
         std::fs::write(
             &fake,
             format!(
-                "#!/bin/sh\ncase \"$1\" in\n  agents) cat '{list}' ;;\n  \
-                 attach) echo \"fake attach $2\"; while read l; do echo \"got $l\"; done ;;\nesac\n",
+                // `left` stands for `←`: the real attach relaunches itself in
+                // place as `claude agents`, the agent list.
+                "#!/bin/sh\ncase \"$1\" in\n  \
+                 agents) if [ \"$2\" = --json ]; then cat '{list}'; else echo 'fake agent list'; \
+                 while read l; do :; done; fi ;;\n  \
+                 attach) echo \"fake attach $2\"; while read l; do [ \"$l\" = left ] && exec \"$0\" agents; \
+                 echo \"got $l\"; done ;;\nesac\n",
                 list = root.join("list.json").display()
             ),
         )
@@ -360,6 +365,32 @@ fn a_closed_tab_stays_closed_until_the_open_action() {
     let space = h.space_of("alpha").unwrap();
     assert_eq!(h.agent("aaaa").unwrap()["workspace_id"], space.as_str());
     assert_eq!(h.agents().len(), 1);
+    h.stop();
+}
+
+#[test]
+fn leaving_for_the_agent_list_stays_on_the_tabs_session() {
+    let Some(mut h) = Herdr::new() else { return };
+    h.sessions(&[
+        session("aaaa", "fix auth", &h.dir("alpha"), "working", "busy"),
+        session("bbbb", "write docs", &h.dir("alpha"), "working", "busy"),
+    ]);
+    h.start();
+    h.wait_for("the session", || h.agent("aaaa").is_some());
+    let pane = h.agent("aaaa").unwrap()["pane_id"].as_str().unwrap().to_string();
+    let screen = || h.cli_text(&["pane", "read", &pane, "--source", "recent"]);
+    h.wait_for("the attach", || screen().contains("fake attach aaaa"));
+
+    // `←` turns the attach into the agent list, where another session could
+    // be opened; the tab ends it at once and offers its own session again.
+    h.cli(&["pane", "run", &pane, "left"]);
+    h.wait_for("the prompt", || {
+        screen().contains("The agent list isn't available here")
+    });
+    assert_eq!(h.agent("aaaa").unwrap()["pane_id"], pane.as_str());
+    h.cli(&["pane", "send-keys", &pane, "enter"]);
+    h.wait_for("attaching again", || screen().matches("fake attach aaaa").count() == 2);
+    assert!(!screen().contains("fake attach bbbb"));
     h.stop();
 }
 

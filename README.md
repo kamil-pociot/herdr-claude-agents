@@ -34,7 +34,7 @@ From then on it runs whenever the Herdr server does.
 |---|---|
 | start a session (`claude --bg …`, or from `claude agents`) | a tab named after it in its project's space, and a `claude` agent in the sidebar |
 | select it in the Agents sidebar | its tab, attached; type to it as usual |
-| `←` (agent view) and quit, or `Ctrl-Z`, in a session tab | "Enter: attach again · q: close this tab" |
+| `←` (towards Claude's agent list) or `Ctrl-Z` in a session tab | the tab stays on its session: "Enter: attach again · q: close this tab" |
 | close a session's tab | it stays closed until the session ends or you run the action below |
 | `herdr plugin action invoke kamilpociot.claude-agents.open` | reopens closed tabs (and starts the plugin if it isn't running) |
 

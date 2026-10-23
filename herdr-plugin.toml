@@ -1,6 +1,6 @@
 id = "kamilpociot.claude-agents"
 name = "Claude background agents"
-version = "0.2.1"
+version = "0.2.2"
 min_herdr_version = "0.9.2"
 description = "Shows Claude Code background sessions as Herdr agents, each in the space of its project"
 platforms = ["macos", "linux"]

@@ -1,0 +1,5 @@
+#!/bin/sh
+# Launcher used by herdr-plugin.toml: the release build, or the binary named by
+# HERDR_CLAUDE_AGENTS_BIN (tests point it at the debug build).
+root=$(dirname "$0")/..
+exec "${HERDR_CLAUDE_AGENTS_BIN:-$root/target/release/herdr-claude-agents}" "$@"

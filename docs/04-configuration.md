@@ -12,7 +12,7 @@ herdr plugin action invoke kamilpociot.claude-agents.open    # start now, or res
 
 Linking registers the checkout; Herdr runs `bin/herdr-claude-agents`, which runs `target/release/herdr-claude-agents`, so rebuild after a change. A running watcher keeps the old binary until its tab is closed and reopened (or Herdr restarts).
 
-Once the repository is on GitHub, `herdr plugin install <owner>/<repo>` works too: the manifest's build step runs `cargo build --release --locked`.
+Without a checkout, `herdr plugin install kamil-pociot/herdr-claude-agents` clones the repository into a Herdr-managed folder and runs the manifest's build step (`cargo build --release --locked`); `herdr plugin update` fetches and rebuilds it. Installing over a linked checkout is refused: unlink first.
 
 `herdr plugin unlink kamilpociot.claude-agents` removes it; close the `Claude` workspace yourself.
 

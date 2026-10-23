@@ -15,10 +15,16 @@ Background sessions run in Claude's daemon, not in any terminal, so Herdr never 
 Needs Herdr 0.9.2+, Claude Code with background sessions, and Rust to build.
 
 ```sh
-git clone <this repo> && cd herdr-claude-agents
+herdr plugin install kamil-pociot/herdr-claude-agents       # clones and builds it
+herdr plugin action invoke kamilpociot.claude-agents.open   # or restart Herdr
+```
+
+To work on it, link a checkout instead:
+
+```sh
+git clone https://github.com/kamil-pociot/herdr-claude-agents && cd herdr-claude-agents
 cargo build --release
 herdr plugin link "$PWD"
-herdr plugin action invoke kamilpociot.claude-agents.open   # or restart Herdr
 ```
 
 From then on the sessions tab opens whenever the Herdr server starts.

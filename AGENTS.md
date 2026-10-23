@@ -32,7 +32,7 @@ Work in the main checkout, on `main` or on a normal branch (`git switch -c <name
 
 - Small changes can go straight to `main`; larger ones on a branch, merged with `git merge --ff-only` once the checks pass.
 - Leave the owner's IDE files (`.idea/`) alone.
-- There is no remote yet; don't push unless asked.
+- The remote is `origin` (github.com/kamil-pociot/herdr-claude-agents); push only when asked.
 - Never touch the owner's real Herdr server while testing (no `herdr server stop`, no closing their panes). Use an isolated server: `XDG_CONFIG_HOME=/tmp/x/config XDG_STATE_HOME=/tmp/x/state herdr server` — that is what `tests/e2e.rs` does.
 - Never attach to, prompt or stop the owner's real Claude sessions from tests. The e2e tests use a fake `claude`.
 

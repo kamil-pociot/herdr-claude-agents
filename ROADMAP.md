@@ -44,5 +44,5 @@ Goal: Herdr detects Claude Code background sessions and shows them as agents —
 
 - Optionally place a session's tab in the workspace of its project (matching `cwd`) instead of the `Claude` workspace.
 - Keys in the sessions tab: Enter to jump to a session's tab, `a` to reopen closed tabs.
-- Publish on GitHub with the `herdr-plugin` topic so `herdr plugin install` and the marketplace find it.
+- Add the `herdr-plugin` topic on GitHub so the marketplace lists it (the repository is public at github.com/kamil-pociot/herdr-claude-agents; `herdr plugin install` already works).
 - Watch for Herdr adding runtime pane listing or plugin storage APIs, which would simplify the saved state.

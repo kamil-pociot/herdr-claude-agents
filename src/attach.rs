@@ -20,9 +20,10 @@ use crate::sync::Saved;
 /// How often the attach is checked for having turned into the agent list.
 const CHECK: Duration = Duration::from_millis(100);
 /// How often, in the agent list, the tab looks at which session it shows.
-const LOOK: Duration = Duration::from_millis(300);
-/// How long it gets to quit before it is killed.
-const GRACE: Duration = Duration::from_secs(2);
+const LOOK: Duration = Duration::from_millis(100);
+/// How long it gets to quit before it is killed. The tab restores the
+/// terminal itself, so this is only courtesy.
+const GRACE: Duration = Duration::from_millis(500);
 /// How long to wait for the watcher to open a session that has no tab.
 const NEW_TAB: Duration = Duration::from_secs(6);
 /// The terminal title of Claude's agent list.
@@ -46,11 +47,9 @@ pub fn run(ctx: &Context) -> Result<()> {
     };
     loop {
         match tab.attach()? {
-            Left::Opened(other) => {
-                // Back on this tab's session at once; the other has its own tab.
-                tab.show(&other);
-                continue;
-            }
+            // Back on this tab's session at once; the other one was shown in
+            // its own tab the moment it was opened.
+            Left::Opened => continue,
             Left::Quit | Left::Stopped => {}
         }
         // Ended (stopped or removed): the tab goes; the watcher forgets it.
@@ -77,8 +76,8 @@ enum Left {
     Quit,
     /// `Ctrl-Z`.
     Stopped,
-    /// Another session was opened from the agent list (its id).
-    Opened(String),
+    /// Another session was opened from the agent list.
+    Opened,
 }
 
 struct Tab<'a> {
@@ -128,7 +127,9 @@ impl Tab<'_> {
                 None if looked.elapsed() >= LOOK && args_of(pid).is_some_and(|a| in_agent_list(&a)) => {
                     looked = Instant::now();
                     if let Some(other) = self.opened_elsewhere(&mut seen) {
-                        left = Left::Opened(other);
+                        // Its own tab first: that is what you see change.
+                        self.show(&other);
+                        left = Left::Opened;
                         end(pid, libc::SIGTERM);
                         ending = Some(Instant::now());
                     }
@@ -154,18 +155,27 @@ impl Tab<'_> {
     fn opened_elsewhere(&self, seen: &mut Option<String>) -> Option<String> {
         let pane = self.pane.as_deref()?;
         let title = self.herdr.pane_title(pane).ok().flatten();
-        let screen = match title.as_deref() {
-            Some(t) if t != LIST_TITLE => None,
-            _ => self.herdr.pane_screen(pane).ok(),
+        // The screen only when Claude set no title at all.
+        let screen = match title {
+            None => self.herdr.pane_screen(pane).ok(),
+            Some(_) => None,
         };
         let name = shown(title.as_deref(), screen.as_deref())?;
         if seen.as_deref() == Some(name.as_str()) {
             return None;
         }
         *seen = Some(name.clone());
-        let sessions = claude::list(&self.claude).ok()?;
-        let s = sessions.iter().find(|s| s.name == name || s.id == name)?;
-        (s.id != self.id).then(|| s.id.clone())
+        // The watcher's state knows every session with a tab; Claude, slower,
+        // only one too new for it.
+        let saved = Saved::load(&self.ctx.state_path());
+        let id = match saved.session_named(&name) {
+            Some(id) => id.to_string(),
+            None => {
+                let sessions = claude::list(&self.claude).ok()?;
+                sessions.into_iter().find(|s| s.name == name || s.id == name)?.id
+            }
+        };
+        (id != self.id).then_some(id)
     }
 
     /// Shows session `other`'s own tab, asking the watcher to open it first
@@ -194,11 +204,13 @@ impl Tab<'_> {
 
 /// The session Claude shows in a pane, from its terminal title (Claude sets
 /// it to the open session's name, or "claude agents" in the list) or, with
-/// no telling title, from the screen: the open session's name sits in the
-/// rule under its prompt (`──── fix auth ─`). None in the list.
+/// no title, from the screen: the open session's name sits in the rule under
+/// its prompt (`──── fix auth ─`). None in the list.
 fn shown(title: Option<&str>, screen: Option<&str>) -> Option<String> {
-    if let Some(t) = title.map(str::trim).filter(|t| !t.is_empty() && *t != LIST_TITLE) {
-        return Some(t.to_string());
+    match title.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(LIST_TITLE) => return None,
+        Some(t) => return Some(t.to_string()),
+        None => {}
     }
     screen?.lines().rev().find_map(|line| {
         let line = line.trim();
@@ -315,10 +327,8 @@ mod tests {
         // No title: the name in the rule under the prompt.
         let session = "● done\n──────────────── cli-file-browser-tree (2) ─\n❯ \n────────────────\n  ⏵⏵ auto mode";
         assert_eq!(shown(None, Some(session)).as_deref(), Some("cli-file-browser-tree (2)"));
-        assert_eq!(
-            shown(Some("claude agents"), Some(session)).as_deref(),
-            Some("cli-file-browser-tree (2)")
-        );
+        // The list's title wins over the screen.
+        assert_eq!(shown(Some("claude agents"), Some(session)), None);
         assert_eq!(shown(None, Some(list)), None);
         assert_eq!(shown(None, None), None);
         assert_eq!(shown(Some("  "), None), None);

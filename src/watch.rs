@@ -140,6 +140,7 @@ fn open(
         s.id.clone(),
         Tracked {
             pane: PaneRef::of(&pane),
+            name: s.name.clone(),
             shown: None,
         },
     );
@@ -164,6 +165,7 @@ fn report(herdr: &Herdr, saved: &mut Saved, seq: &mut Seq, s: &Session) -> Resul
     if renamed {
         herdr.rename_tab(&t.pane.tab_id, &s.name)?;
     }
+    t.name = s.name.clone();
     t.shown = Some(Shown::of(s));
     Ok(())
 }

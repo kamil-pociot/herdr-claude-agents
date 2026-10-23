@@ -50,6 +50,10 @@ impl Shown {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tracked {
     pub pane: PaneRef,
+    /// The session's name, for a tab telling which session Claude's agent
+    /// list opened without asking Claude.
+    #[serde(default)]
+    pub name: String,
     /// Not saved: a new watcher reports everything once.
     #[serde(skip)]
     pub shown: Option<Shown>,
@@ -76,6 +80,14 @@ impl Saved {
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or_default()
+    }
+
+    /// The id of the session named `name` that has a tab.
+    pub fn session_named(&self, name: &str) -> Option<&str> {
+        self.sessions
+            .iter()
+            .find(|(id, t)| t.name == name || id.as_str() == name)
+            .map(|(id, _)| id.as_str())
     }
 
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
@@ -173,6 +185,7 @@ mod tests {
     fn tracked(saved: &mut Saved, id: &str, p: &Pane, shown: Option<&Session>) {
         let t = Tracked {
             pane: PaneRef::of(p),
+            name: id.into(),
             shown: shown.map(Shown::of),
         };
         saved.sessions.insert(id.into(), t);
@@ -295,6 +308,8 @@ mod tests {
         .unwrap();
         assert_eq!(Saved::load(&path), Saved::default());
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        assert_eq!(back.session_named("a"), Some("a"));
+        assert_eq!(back.session_named("nobody"), None);
         // Missing or broken: start empty.
         assert_eq!(Saved::load(Path::new("/nonexistent/s.json")), Saved::default());
     }

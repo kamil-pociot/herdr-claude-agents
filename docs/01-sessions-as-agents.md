@@ -53,7 +53,7 @@ Herdr's Claude integration (`herdr integration install claude`) reports a sessio
 
 - `src/claude.rs`: running and parsing `claude agents --json` (background sessions only), each job's `detail`.
 - `src/spaces.rs`: a session's project (`git rev-parse --show-toplevel`) and the space for it.
-- `src/sync.rs`: `plan` — the table above as pure code (`Op::Open`, `Report`, `Close`, `Dismiss`, `Forget`, `Replace`) — and the saved state (`<state dir>/server-<hash>.json`: each session's pane, the closed tabs, the last error).
+- `src/sync.rs`: `plan` — the table above as pure code (`Op::Open`, `Report`, `Close`, `Dismiss`, `Forget`, `Replace`) — and the saved state (`<state dir>/server-<hash>.json`: each session's pane and name, the closed tabs, the last error).
 - `src/watch.rs`: the loop, file watching (`notify`), carrying out the plan, creating spaces, stopping with the server or the plugin.
 - `src/main.rs`: `startup` / `open`.
 - Unit: every row of the table, restored panes, closed tabs, saved state (also v0.1's), choosing a space (own folder first, project, home and `/` only exactly), the git top level, which file changes wake the watcher.

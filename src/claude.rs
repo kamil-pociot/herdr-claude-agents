@@ -99,11 +99,15 @@ struct Raw {
 
 /// Parses `claude agents --json`, keeping only background sessions: an
 /// interactive one already lives in some terminal (and Herdr sees it there if
-/// that terminal is a Herdr pane).
+/// that terminal is a Herdr pane). Entries are read one by one and an entry
+/// that doesn't fit is skipped, so one odd entry (an interactive session
+/// without an `id`, say) never hides the others.
 pub fn parse(json: &str) -> Result<Vec<Session>> {
-    let raw: Vec<Raw> = serde_json::from_str(json).context("unexpected `claude agents --json` output")?;
-    Ok(raw
+    let entries: Vec<serde_json::Value> =
+        serde_json::from_str(json).context("unexpected `claude agents --json` output")?;
+    Ok(entries
         .into_iter()
+        .filter_map(|e| serde_json::from_value::<Raw>(e).ok())
         .filter(|r| r.kind.as_deref().is_none_or(|k| k == "background" || k == "bg"))
         .map(|r| Session {
             name: r.name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| r.id.clone()),
@@ -171,11 +175,14 @@ mod tests {
              "sessionId": "1a2b3c4d-0001", "status": "busy", "state": "working"},
             {"id": "5e6f7a8b", "cwd": "/r/blog", "kind": "background", "name": "  ", "state": "blocked"},
             {"id": "inter", "kind": "interactive", "state": "working"},
+            {"pid": 7, "kind": "interactive", "name": "no id", "status": "busy"},
+            {"id": 42, "kind": "background", "name": "an id that isn't text"},
             {"id": "old", "state": "done"}
         ]"#;
         let s = parse(json).unwrap();
         let ids: Vec<_> = s.iter().map(|s| s.id.as_str()).collect();
-        // Interactive sessions are left out; a missing kind is kept.
+        // Interactive sessions and entries that do not fit are left out; a
+        // missing kind is kept.
         assert_eq!(ids, ["1a2b3c4d", "5e6f7a8b", "old"]);
         assert_eq!(s[0].name, "fix-login");
         assert_eq!(s[0].session_id.as_deref(), Some("1a2b3c4d-0001"));

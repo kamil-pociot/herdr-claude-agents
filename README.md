@@ -61,3 +61,7 @@ poll_seconds = 2       # fallback poll; file changes wake it sooner
 - [`docs/`](docs/README.md) — one document per feature
 - [`ROADMAP.md`](ROADMAP.md) — decisions and next steps
 - [`AGENTS.md`](AGENTS.md) — working on the code
+
+## License
+
+[MIT](LICENSE)

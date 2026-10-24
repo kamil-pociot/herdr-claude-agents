@@ -15,6 +15,7 @@ use anyhow::{Context as _, Result, bail};
 use crate::claude;
 use crate::herdr::Herdr;
 use crate::plugin::{self, Context};
+use crate::relay;
 use crate::sync::Saved;
 
 /// How often the attach is checked for having turned into the agent list.
@@ -97,10 +98,11 @@ impl Tab<'_> {
     /// (the session itself keeps running).
     fn attach(&self) -> Result<Left> {
         let saved = Termios::get();
-        let child = Command::new(&self.claude)
-            .args(["attach", &self.id])
-            .spawn()
+        // On a terminal of its own, so the tab can give it the keyboard mode
+        // it doesn't ask for (Shift-Enter: a new line, not "send").
+        let (child, mut relay) = relay::spawn(Command::new(&self.claude).args(["attach", &self.id]))
             .with_context(|| format!("cannot run `{} attach {}`", self.claude, self.id))?;
+        relay::raw_mode();
         let pid = child.id() as libc::pid_t;
         let mut left = Left::Quit;
         let mut ending: Option<Instant> = None;
@@ -137,8 +139,10 @@ impl Tab<'_> {
                 Some(since) if since.elapsed() > GRACE => end(pid, libc::SIGKILL),
                 _ => {}
             }
+            relay.resize();
             std::thread::sleep(CHECK);
         }
+        relay.finish();
         // Whatever state it left the terminal in: cooked mode, main screen,
         // visible cursor. (1047, not 1049: that also restores a saved cursor,
         // which sends output back to the top when no alternate screen was on.)

@@ -68,10 +68,13 @@ impl Herdr {
                  printf '\\033]0;claude agents\\007'; echo 'fake agent list'; \
                  while read l; do case \"$l\" in 'open '*) n=${{l#open }}; \
                  printf '\\033]0;%s\\007' \"$n\"; echo \"fake viewing $n\" ;; esac; done; fi ;;\n  \
-                 attach) echo \"fake attach $2\"; while read l; do [ \"$l\" = left ] && exec \"$0\" agents; \
+                 attach) if [ \"$2\" = keys ]; then printf '\\033[?1049h'; echo 'fake raw attach'; \
+                 stty raw -echo; dd bs=64 count=1 2>/dev/null > '{keys}'; stty sane; printf '\\033[?1049l'; \
+                 echo 'fake keys read'; while read l; do :; done; fi; echo \"fake attach $2\"; while read l; do [ \"$l\" = left ] && exec \"$0\" agents; \
                  echo \"got $l\"; done ;;\nesac\n",
                 list = root.join("list.json").display(),
-                started = root.join("bg-started").display()
+                started = root.join("bg-started").display(),
+                keys = root.join("keys").display()
             ),
         )
         .unwrap();
@@ -539,5 +542,33 @@ fn the_new_session_dialog_starts_one_in_a_folder_of_the_space() {
     });
     let history = std::fs::read_to_string(state.join("commands.json")).unwrap();
     assert!(history.contains("--bg --model opus"), "{history}");
+    h.stop();
+}
+
+#[test]
+fn shift_enter_in_a_session_tab_is_not_enter() {
+    let Some(mut h) = Herdr::new() else { return };
+    // `keys`: the fake attach switches to the alternate screen, as Claude's
+    // does, and keeps the bytes of the next key it gets.
+    h.sessions(&[session("keys", "type here", &h.dir("alpha"), "working", "busy")]);
+    h.start();
+    h.wait_for("the session", || h.agent("keys").is_some());
+    let pane = h.agent("keys").unwrap()["pane_id"].as_str().unwrap().to_string();
+    h.wait_for("the attach", || {
+        h.cli_text(&["pane", "read", &pane, "--source", "visible"])
+            .contains("fake raw attach")
+    });
+    // `claude attach` never asks for the kitty keyboard protocol; the tab
+    // sets it on the alternate screen, so Herdr sends Shift-Enter as such
+    // (a new line in Claude) instead of a plain Enter (send).
+    h.cli(&["pane", "send-keys", &pane, "shift+enter"]);
+    let keys = h.root.join("keys");
+    h.wait_for("the key", || std::fs::metadata(&keys).is_ok_and(|m| m.len() > 0));
+    assert_eq!(std::fs::read(&keys).unwrap(), b"\x1b[13;2u");
+    // Back on the main screen, keys are plain again.
+    h.wait_for("the main screen", || {
+        h.cli_text(&["pane", "read", &pane, "--source", "visible"])
+            .contains("fake keys read")
+    });
     h.stop();
 }

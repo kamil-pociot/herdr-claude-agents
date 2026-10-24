@@ -57,6 +57,7 @@ Herdr plugins are a manifest (`herdr-plugin.toml`) plus commands; the Herdr CLI 
 | `sync.rs` | pure planning: saved state + sessions + panes → `Op`s; the saved state itself |
 | `watch.rs` | the loop: file watching + polling, carrying out `Op`s, creating spaces, reporting, stopping |
 | `attach.rs` | the session tab wrapper |
+| `relay.rs` | `claude attach` on a pseudo-terminal of its own, relayed, with the kitty keyboard mode it doesn't ask for |
 | `new.rs` | the new-session action and dialog (`crossterm`) |
 | `plugin.rs` | plugin env, `config.toml`, per-server state paths, the watcher lock |
 

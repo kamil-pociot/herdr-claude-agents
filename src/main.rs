@@ -6,6 +6,7 @@ mod claude;
 mod herdr;
 mod new;
 mod plugin;
+mod relay;
 mod spaces;
 mod sync;
 mod watch;

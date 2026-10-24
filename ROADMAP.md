@@ -2,7 +2,7 @@
 
 Goal: Herdr detects Claude Code background sessions and shows them as agents — visible in the Agents sidebar, with Herdr's notifications and other agent features working for them — and the list follows sessions as they start, change and end.
 
-> Status: **v0.2 implemented** (2026-10-23): sessions in their projects' spaces, shown like any Claude, a headless watcher. Herdr 0.9.5, Claude Code 2.1.309.
+> Status: **v0.2 implemented** (2026-10-23); listed on the [Herdr marketplace](https://herdr.dev/plugins/) since 2026-10-24 (GitHub topic `herdr-plugin`): sessions in their projects' spaces, shown like any Claude, a headless watcher. Herdr 0.9.5, Claude Code 2.1.309.
 
 ---
 
@@ -48,5 +48,4 @@ Goal: Herdr detects Claude Code background sessions and shows them as agents —
 ## 2. Next
 
 - Optionally close a space the plugin created once its last session ends and nothing else was opened there.
-- Add the `herdr-plugin` topic on GitHub so the marketplace lists it (the repository is public at github.com/kamil-pociot/herdr-claude-agents; `herdr plugin install` already works).
 - Watch for Herdr adding runtime pane listing or plugin storage APIs, which would simplify the saved state.

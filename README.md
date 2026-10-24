@@ -45,13 +45,13 @@ Bind the actions to keys in Herdr's `config.toml`:
 
 ```toml
 [[keys.command]]
-key = "prefix+a"
+key = "prefix+shift+a"
 type = "plugin_action"
 command = "kamilpociot.claude-agents.open"
 description = "Claude background sessions"
 
 [[keys.command]]
-key = "prefix+shift+a"
+key = "prefix+a"
 type = "plugin_action"
 command = "kamilpociot.claude-agents.new"
 description = "new Claude background session"

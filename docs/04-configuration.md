@@ -21,17 +21,17 @@ Without a checkout, `herdr plugin install kamil-pociot/herdr-claude-agents` clon
 - **Claude: show background sessions** (`kamilpociot.claude-agents.open`) reopens session tabs you closed, and starts the watcher when none runs.
 - **Claude: new background session** (`kamilpociot.claude-agents.new`) opens a dialog that starts one in a folder of the current space, with `claude --bg` or your own command ([06 · New background session](06-new-session.md)).
 
-Bind them in Herdr's `config.toml`:
+Bind them in Herdr's `config.toml`. Free after the prefix in Herdr's defaults are `a`, `d`, `f`, `i`, `m`, `t`, `u` and `y` (other plugins may take some):
 
 ```toml
 [[keys.command]]
-key = "prefix+a"
+key = "prefix+shift+a"
 type = "plugin_action"
 command = "kamilpociot.claude-agents.open"
 description = "Claude background sessions"
 
 [[keys.command]]
-key = "prefix+shift+a"
+key = "prefix+a"
 type = "plugin_action"
 command = "kamilpociot.claude-agents.new"
 description = "new Claude background session"

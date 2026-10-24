@@ -44,7 +44,7 @@ Bind the action to a key in Herdr's `config.toml` ([04](04-configuration.md#the-
 
 ```toml
 [[keys.command]]
-key = "prefix+shift+a"
+key = "prefix+a"
 type = "plugin_action"
 command = "kamilpociot.claude-agents.new"
 description = "new Claude background session"

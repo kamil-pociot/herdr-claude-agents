@@ -60,14 +60,18 @@ impl Herdr {
                 // `left` stands for `←`: the real attach relaunches itself in
                 // place as `claude agents`, the agent list, titled so; `open
                 // <name>` opens a session there, titling the terminal with it.
+                // `--bg` records where and how it was started; a test then adds
+                // the session to the list, as Claude would.
                 "#!/bin/sh\ncase \"$1\" in\n  \
+                 --bg) echo \"$PWD|$*\" > '{started}'; echo 'fake started' ;;\n  \
                  agents) if [ \"$2\" = --json ]; then cat '{list}'; else \
                  printf '\\033]0;claude agents\\007'; echo 'fake agent list'; \
                  while read l; do case \"$l\" in 'open '*) n=${{l#open }}; \
                  printf '\\033]0;%s\\007' \"$n\"; echo \"fake viewing $n\" ;; esac; done; fi ;;\n  \
                  attach) echo \"fake attach $2\"; while read l; do [ \"$l\" = left ] && exec \"$0\" agents; \
                  echo \"got $l\"; done ;;\nesac\n",
-                list = root.join("list.json").display()
+                list = root.join("list.json").display(),
+                started = root.join("bg-started").display()
             ),
         )
         .unwrap();
@@ -103,6 +107,8 @@ impl Herdr {
             .env("XDG_CACHE_HOME", self.root.join("cache"))
             .env("CLAUDE_CONFIG_DIR", self.root.join("claude"))
             .env("HERDR_CLAUDE_AGENTS_BIN", env!("CARGO_BIN_EXE_herdr-claude-agents"))
+            // Panes, and the dialog's `$SHELL -ic`, use a predictable shell.
+            .env("SHELL", "/bin/sh")
             .stdin(Stdio::null());
         c
     }
@@ -451,5 +457,87 @@ fn disabling_the_plugin_stops_the_watcher() {
     h.wait_for("the watcher", || h.watcher_running());
     h.cli(&["plugin", "disable", PLUGIN]);
     h.wait_for("the watcher to stop", || !h.watcher_running());
+    h.stop();
+}
+
+#[test]
+fn the_new_session_dialog_starts_one_in_a_folder_of_the_space() {
+    let Some(mut h) = Herdr::new() else { return };
+    h.start();
+    let alpha = h.open_space("alpha");
+    let pane = h
+        .panes()
+        .into_iter()
+        .find(|p| p["workspace_id"] == alpha.as_str())
+        .unwrap()["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let screen = || h.cli_text(&["pane", "read", &pane, "--source", "visible"]);
+    // The dialog as the action's popup runs it, here in an ordinary pane so
+    // the test can type into it and read it (a popup is outside the API).
+    let state = h.root.join("state/herdr/plugins").join(PLUGIN);
+    let config = h.cli_text(&["plugin", "config-dir", PLUGIN]).trim().to_string();
+    let run = format!(
+        "CLAUDE_AGENTS_BASE='{}' CLAUDE_AGENTS_SPACE=alpha HERDR_PLUGIN_STATE_DIR='{}' HERDR_PLUGIN_CONFIG_DIR='{}' '{}' dialog",
+        h.dir("alpha"),
+        state.display(),
+        config,
+        env!("CARGO_BIN_EXE_herdr-claude-agents")
+    );
+    h.cli(&["pane", "run", &pane, &run]);
+    h.wait_for("the dialog", || screen().contains("New Claude background session"));
+    assert!(screen().contains("in space alpha"));
+    assert!(screen().contains("src/"), "{}", screen());
+
+    // A folder of the space, completed with Tab; a command of your own and a prompt.
+    h.cli(&["pane", "send-text", &pane, "sr"]);
+    h.cli(&["pane", "send-keys", &pane, "tab"]);
+    h.wait_for("the completed folder", || screen().contains("Folder   src/"));
+    h.cli(&["pane", "send-keys", &pane, "down", "ctrl+u"]);
+    let fake = h.root.join("claude-fake").display().to_string();
+    h.cli(&["pane", "send-text", &pane, &format!("{fake} --bg --model opus")]);
+    // (↑↓ in the command field walk recent commands; Tab moves on.)
+    h.cli(&["pane", "send-keys", &pane, "tab"]);
+    h.cli(&["pane", "send-text", &pane, "fix it's login"]);
+    h.cli(&["pane", "send-keys", &pane, "enter"]);
+
+    // It ran in that folder, through the shell, with the prompt as one argument.
+    let started = h.root.join("bg-started");
+    let deadline = Instant::now() + WAIT;
+    while !started.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(started.exists(), "the command didn't run:\n{}", screen());
+    let alpha_src = std::fs::canonicalize(h.root.join("repos/alpha/src")).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&started).unwrap().trim(),
+        format!("{}|--bg --model opus fix it's login", alpha_src.display())
+    );
+    // The session appears; the watcher opens its tab in alpha's space, and the
+    // dialog shows that tab.
+    h.sessions(&[session(
+        "nnnn",
+        "fix login",
+        alpha_src.to_str().unwrap(),
+        "working",
+        "busy",
+    )]);
+    h.wait_for("the new session's tab, shown", || {
+        let Some(a) = h.agent("nnnn") else { return false };
+        a["workspace_id"] == alpha.as_str()
+            && h.panes()
+                .into_iter()
+                .any(|p| p["focused"] == true && p["pane_id"] == a["pane_id"])
+    });
+    // The dialog has finished and remembers the command for next time.
+    // (A popup closes; in this pane the shell's prompt comes back.)
+    h.wait_for("the dialog to end", || {
+        let s = screen();
+        let last = s.lines().map(str::trim_end).rfind(|l| !l.is_empty()).unwrap_or("");
+        last.ends_with('$') || last.ends_with('#')
+    });
+    let history = std::fs::read_to_string(state.join("commands.json")).unwrap();
+    assert!(history.contains("--bg --model opus"), "{history}");
     h.stop();
 }

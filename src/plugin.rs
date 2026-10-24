@@ -9,8 +9,10 @@ use std::time::Duration;
 use serde::Deserialize;
 
 pub const PLUGIN_ID: &str = "kamilpociot.claude-agents";
-/// The `[[panes]]` entrypoint of a session tab in herdr-plugin.toml.
+/// The `[[panes]]` entrypoints in herdr-plugin.toml: a session tab, and the
+/// new-session dialog (a popup).
 pub const SESSION: &str = "session";
+pub const NEW: &str = "new-session";
 /// How a session pane learns which session it shows.
 pub const SESSION_ENV: &str = "CLAUDE_AGENTS_SESSION";
 pub const NAME_ENV: &str = "CLAUDE_AGENTS_NAME";

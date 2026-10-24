@@ -105,6 +105,25 @@ impl Herdr {
         Ok(serde_json::from_value(v["plugin_pane"]["pane"].clone())?)
     }
 
+    /// Opens one of the plugin's `[[panes]]` with its manifest placement (a
+    /// popup for the dialog: the CLI's `--placement` has no `popup`).
+    pub fn open_popup(&self, plugin: &str, entrypoint: &str, env: &[(&str, &str)]) -> Result<()> {
+        let mut args = vec![
+            "plugin".to_string(),
+            "pane".into(),
+            "open".into(),
+            "--plugin".into(),
+            plugin.into(),
+            "--entrypoint".into(),
+            entrypoint.into(),
+        ];
+        for (k, v) in env {
+            args.push("--env".into());
+            args.push(format!("{k}={v}"));
+        }
+        self.run(&args).map(drop)
+    }
+
     pub fn close_pane(&self, pane: &str) -> Result<()> {
         self.run(&["pane", "close", pane]).map(drop)
     }

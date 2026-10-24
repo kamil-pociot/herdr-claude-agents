@@ -49,6 +49,8 @@ The background sessions keep running while Herdr is down. On a restart Herdr res
 
 Herdr's Claude integration (`herdr integration install claude`) reports a session's id at `SessionStart` to the pane in `HERDR_PANE_ID`. A background session inherits that variable from wherever Claude's daemon was started, so the hook may point a stale pane at it. The plugin doesn't rely on that hook; its reports win on its own panes.
 
+Starting one from Herdr: [06 · New background session](06-new-session.md).
+
 ## Code and tests
 
 - `src/claude.rs`: running and parsing `claude agents --json` (background sessions only), each job's `detail`.

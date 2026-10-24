@@ -4,6 +4,7 @@
 mod attach;
 mod claude;
 mod herdr;
+mod new;
 mod plugin;
 mod spaces;
 mod sync;
@@ -14,11 +15,13 @@ use std::time::Duration;
 
 use crate::plugin::Context;
 
-const USAGE: &str = "usage: herdr-claude-agents <startup|open|attach>
+const USAGE: &str = "usage: herdr-claude-agents <startup|open|new|attach|dialog>
 
   startup  watch the sessions for this Herdr server (Herdr's startup hook)
   open     reopen session tabs you closed; watch if nothing does yet
-  attach   one session's tab (reads CLAUDE_AGENTS_SESSION)";
+  new      open the new-session dialog over the current space
+  attach   one session's tab (reads CLAUDE_AGENTS_SESSION)
+  dialog   the new-session dialog itself";
 
 /// How long a new watcher waits for one from before a Herdr restart, which
 /// notices the old server is gone within a poll.
@@ -35,6 +38,8 @@ fn main() -> ExitCode {
             let _ = std::fs::write(ctx.reopen_path(), "");
             watch::run(&ctx, Duration::ZERO)
         }
+        Some("new") => new::open(&ctx),
+        Some("dialog") => new::run(&ctx),
         Some("attach") => attach::run(&ctx).inspect_err(|e| {
             // A tab that vanished at once would pass for one the user closed;
             // this one stays until the error has been read.

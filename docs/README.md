@@ -9,5 +9,6 @@ herdr-claude-agents is a Herdr plugin that shows Claude Code background sessions
 | 03 | [Session tabs](03-session-tabs.md) | `claude attach <id>` in a tab: leaving it, attaching again, closing it, errors |
 | 04 | [Install and configuration](04-configuration.md) | Building, linking, the `open` action and a key for it, `config.toml` |
 | 05 | [Testing](05-testing.md) | Unit tests and end-to-end tests against an isolated Herdr server |
+| 06 | [New background session](06-new-session.md) | A dialog that starts a session in a folder of the current space, with `claude --bg` or your own command |
 
 See also: [`../README.md`](../README.md) (overview and quick start), [`../ROADMAP.md`](../ROADMAP.md) (decisions, findings, next steps), [`../AGENTS.md`](../AGENTS.md) (working on the code).

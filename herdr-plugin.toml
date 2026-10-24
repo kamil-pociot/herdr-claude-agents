@@ -21,6 +21,14 @@ title = "Claude: show background sessions"
 contexts = ["workspace"]
 command = ["sh", "-c", "exec sh \"$HERDR_PLUGIN_ROOT/bin/herdr-claude-agents\" open"]
 
+# Starts a background session in a folder of the current space: opens the
+# dialog below over it.
+[[actions]]
+id = "new"
+title = "Claude: new background session"
+contexts = ["workspace"]
+command = ["sh", "-c", "exec sh \"$HERDR_PLUGIN_ROOT/bin/herdr-claude-agents\" new"]
+
 # One background session: `claude attach <id>`, opened by the watcher in the
 # session's folder (hence $HERDR_PLUGIN_ROOT rather than a relative path).
 [[panes]]
@@ -28,3 +36,12 @@ id = "session"
 title = "Claude session"
 placement = "tab"
 command = ["sh", "-c", "exec sh \"$HERDR_PLUGIN_ROOT/bin/herdr-claude-agents\" attach"]
+
+# The new-session dialog: folder (relative to the space), command, prompt.
+[[panes]]
+id = "new-session"
+title = "New Claude background session"
+placement = "popup"
+width = "72%"
+height = 18
+command = ["sh", "-c", "exec sh \"$HERDR_PLUGIN_ROOT/bin/herdr-claude-agents\" dialog"]

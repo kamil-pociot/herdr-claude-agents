@@ -22,6 +22,7 @@ Goal: Herdr detects Claude Code background sessions and shows them as agents —
 | 10 | Talking to Herdr | The **CLI** (`HERDR_BIN_PATH`), as Herdr recommends for plugins, not the raw socket. |
 | 11 | Display | **Like any Claude** in the Agents sidebar (v0.2): no display name, title, state labels or agent name; the plugin pane label cleared. The session's name is on its tab; extras are `$tokens` for custom rows. |
 | 12 | One session per tab | `←` keeps opening Claude's agent list in a session tab, but **a session opened there is shown in its own tab** (focused through Herdr) and the tab goes back to its session, so each tab shows what Herdr reports about it and both stay in the sidebar. The tab notices the relaunch as `claude agents` and then the opened session's name in the terminal title (or on screen). A first version simply ended the agent list; there is no Claude option to turn off only the agent view. |
+| 13 | Starting sessions | **Claude: new background session** opens a dialog as a Herdr **popup** (the only plugin UI besides panes) over the current space: a folder relative to the space's folder (Herdr's plugin context gives `workspace_cwd`), with Tab completion; a command run through `$SHELL -ic` so aliases work (`po`); an optional prompt. Then it waits for the new session and shows its tab. The dialog is tested end to end in an ordinary pane, as popups are outside Herdr's API. |
 
 ## 1. Findings
 
@@ -36,6 +37,7 @@ Goal: Herdr detects Claude Code background sessions and shows them as agents —
 - Workspaces have no folder (`workspace list` / `session.snapshot` carry none); panes do (`cwd`). A workspace closes when its last pane closes.
 - Startup hooks and actions are not stopped with the server: a long-running one outlives it unless it stops itself. `plugin list --json --plugin <id>` lists nothing for an unlinked plugin; the CLI's error for a stopped server is `server_not_running`.
 - `pane rename <pane> --clear` removes a plugin pane's label.
+- `plugin pane open --placement` offers no `popup`; without `--placement` the manifest's `placement = "popup"` is used. A popup has no pane id and is outside the pane APIs; its process gets `HERDR_PLUGIN_CONTEXT_JSON` with the underlying space (`workspace_cwd`, `workspace_label`).
 - `XDG_CONFIG_HOME` + `XDG_STATE_HOME` fully isolate a Herdr server (socket, plugin registry, plugin state) — used by the tests.
 
 **Claude Code (2.1.309)**

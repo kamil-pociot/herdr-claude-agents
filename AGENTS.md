@@ -39,13 +39,15 @@ Work in the main checkout, on `main` or on a normal branch (`git switch -c <name
 
 ## How it fits together
 
-Herdr plugins are a manifest (`herdr-plugin.toml`) plus commands; the Herdr CLI (`$HERDR_BIN_PATH`) is the whole plugin API. One binary, three subcommands, all started through `bin/herdr-claude-agents` (which picks the release build, or `HERDR_CLAUDE_AGENTS_BIN`):
+Herdr plugins are a manifest (`herdr-plugin.toml`) plus commands; the Herdr CLI (`$HERDR_BIN_PATH`) is the whole plugin API. One binary, five subcommands, all started through `bin/herdr-claude-agents` (which picks the release build, or `HERDR_CLAUDE_AGENTS_BIN`):
 
 | Subcommand | Started by | Does |
 |---|---|---|
 | `startup` | `[[startup]]` hook, once per server start | the watcher: headless, runs until the server stops or the plugin is disabled; keeps one tab per session in its project's space |
 | `open` | the `open` action | asks the watcher to reopen tabs the user closed; becomes the watcher if none runs |
+| `new` | the `new` action | opens the new-session dialog as a popup over the current space |
 | `attach` | `[[panes]] session` | one session's tab: `claude attach <id>`, re-attach prompt when left |
+| `dialog` | `[[panes]] new-session` (popup) | the dialog: folder (relative to the space), command, prompt; runs the command, shows the new session's tab |
 
 | Module | Role |
 |---|---|
@@ -55,6 +57,7 @@ Herdr plugins are a manifest (`herdr-plugin.toml`) plus commands; the Herdr CLI 
 | `sync.rs` | pure planning: saved state + sessions + panes → `Op`s; the saved state itself |
 | `watch.rs` | the loop: file watching + polling, carrying out `Op`s, creating spaces, reporting, stopping |
 | `attach.rs` | the session tab wrapper |
+| `new.rs` | the new-session action and dialog (`crossterm`) |
 | `plugin.rs` | plugin env, `config.toml`, per-server state paths, the watcher lock |
 
 ## Conventions
